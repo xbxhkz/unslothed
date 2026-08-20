@@ -7,17 +7,25 @@ Deliberately does NOT ship a second diffusion stack: Studio already loads and
 manages diffusion models, so this tool inherits whatever the user has.
 
 The real entry point is ``DiffusionBackend.generate()`` in
-``core/inference/diffusion.py`` (and its native-engine twin,
-``SdCppDiffusionBackend.generate()`` in ``core/inference/sd_cpp_backend.py``,
-which presents the identical keyword surface). Passing ``init_image`` (a
-base64-encoded source image) without a mask/upscale/reference selects the
-"img2img" workflow inside that method, which denoises the source at
-``strength`` toward ``prompt`` and returns the result at the SOURCE image's
-own size. This is exactly what the production ``POST /images/generate``
-route does (``routes/inference.py``), so this tool goes through the same
-``get_active_diffusion_engine()`` indirection rather than hard-coding one
-engine: whichever backend (diffusers or native sd.cpp) the user currently
-has active is the one this tool edits with.
+``core/inference/diffusion.py``. Passing ``init_image`` (a base64-encoded
+source image) without a mask/upscale/reference selects the "img2img"
+workflow inside that method, which denoises the source at ``strength``
+toward ``prompt`` and returns the result at the SOURCE image's own size.
+This is exactly what the production ``POST /images/generate`` route does
+(``routes/inference.py``), so this tool goes through the same
+``get_active_diffusion_engine()`` indirection rather than hard-coding the
+diffusers backend directly.
+
+That indirection is NOT full engine parity, though: it also covers the
+native ``SdCppDiffusionBackend.generate()`` (``core/inference/sd_cpp_backend.py``),
+which accepts the same keywords but rejects an image-conditioned call
+outright -- passing ``init_image`` raises ``ValueError`` there ("img2img /
+inpaint / reference / upscale are not yet supported on the native sd.cpp
+engine"). So in practice: img2img only actually works on the diffusers
+engine; on native sd.cpp this tool will raise that same ValueError. That is
+the correct failure mode (it matches what the production route does), but
+callers should not assume this tool edits regardless of which engine is
+active.
 """
 
 import base64

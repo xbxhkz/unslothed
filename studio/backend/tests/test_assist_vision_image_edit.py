@@ -55,3 +55,13 @@ class TestEditImage:
         backend = _Backend()
         edit_image(_png(), "x", backend=backend, strength=0.25)
         assert backend.calls[0]["strength"] == 0.25
+
+    def test_the_adapter_uses_keywords_the_real_backend_accepts(self):
+        """Guards against drift: the suite's double cannot catch a typo'd or
+        renamed keyword in the real call, so assert the real signature instead."""
+        import inspect
+
+        from core.inference.diffusion import DiffusionBackend
+
+        params = set(inspect.signature(DiffusionBackend.generate).parameters)
+        assert {"prompt", "init_image", "strength"} <= params
