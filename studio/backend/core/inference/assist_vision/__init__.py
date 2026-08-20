@@ -14,19 +14,38 @@ imported INSIDE functions, never at module scope -- a module-scope
 ``import torch`` stalls the event loop for seconds on first use.
 """
 import os
-import tempfile
+import secrets
 
 from .schemas import ASSIST_VISION_TOOLS, ASSIST_VISION_TOOL_NAMES  # noqa: F401
 
 
-def _write_png(data):
-    """Write PNG bytes to a temp file and return its absolute path.
+def _write_png(data, session_id, name):
+    """Write PNG bytes into the SESSION WORKDIR and return the path.
 
     Tools return a PATH, never an inline data: URI -- a data URI is re-sent to
     the model on every later turn and persisted into replayed history.
+
+    The workdir, not ``tempfile.mkstemp``: the system temp directory is outside
+    the sandbox, so ``resolve_image_bytes`` refuses every path written there
+    ("is outside this conversation's working directory"). That made a returned
+    path useless to everything downstream -- ``remove_background`` ->
+    ``detect_shapes`` chaining was structurally impossible, ``edit_file`` /
+    ``python`` / ``terminal`` could not touch a result, and the user could not
+    find one. Writing where Studio already lets this conversation read and write
+    fixes the lifecycle too: sandbox contents are session-scoped and cleaned up
+    with the session, where temp files just leaked a multi-MB PNG per call.
+
+    ``_get_workdir`` is imported lazily for the same reason ``paths.py`` does
+    it: ``tools`` imports this package, so a module-scope import is circular.
     """
-    fd, path = tempfile.mkstemp(suffix = ".png", prefix = "unsloth_vision_")
-    with os.fdopen(fd, "wb") as f:
+    from core.inference import tools as _tools
+
+    workdir = _tools._get_workdir(session_id)
+    os.makedirs(workdir, exist_ok = True)
+    # Random suffix, not a counter: two calls in one session must not collide,
+    # or the second silently overwrites the result the model was just told about.
+    path = os.path.join(workdir, f"{name}_{secrets.token_hex(4)}.png")
+    with open(path, "wb") as f:
         f.write(data)
     return path
 
@@ -39,7 +58,8 @@ def _do_remove_background(arguments, session_id):
     if err:
         return f"remove_background failed: {err}"
     out = remove_background(data)
-    return f"Background removed. Transparent PNG written to: {_write_png(out)}"
+    path = _write_png(out, session_id, "remove_background")
+    return f"Background removed. Transparent PNG written to: {path}"
 
 
 def _describe(dets):
@@ -69,7 +89,8 @@ def _do_detect_shapes(arguments, session_id):
     if not dets:
         return summary
     annotated = yolo.annotate(data, dets, ".png")
-    return f"{summary}\nAnnotated image written to: {_write_png(annotated)}"
+    path = _write_png(annotated, session_id, "detect_shapes")
+    return f"{summary}\nAnnotated image written to: {path}"
 
 
 def _do_webcam_look(arguments, session_id):
@@ -82,7 +103,8 @@ def _do_webcam_look(arguments, session_id):
     if not dets:
         return summary
     annotated = yolo.annotate(frame, dets, ".png")
-    return f"{summary}\nAnnotated image written to: {_write_png(annotated)}"
+    path = _write_png(annotated, session_id, "webcam_look")
+    return f"{summary}\nAnnotated image written to: {path}"
 
 
 def _do_edit_image_prompt(arguments, session_id):
@@ -95,7 +117,8 @@ def _do_edit_image_prompt(arguments, session_id):
     strength = arguments.get("strength")
     kwargs = {} if strength is None else {"strength": float(strength)}
     out = edit_image(data, arguments.get("prompt", ""), **kwargs)
-    return f"Image edited. Result written to: {_write_png(out)}"
+    path = _write_png(out, session_id, "edit_image_prompt")
+    return f"Image edited. Result written to: {path}"
 
 
 def _do_face_swap(arguments, session_id):
@@ -124,9 +147,10 @@ def _do_face_swap(arguments, session_id):
         )
     except NoFaceDetectedError as e:
         return f"face_swap failed: {e}"
+    path = _write_png(out, session_id, "face_swap")
     return (
-        "Face swapped. Result written to: "
-        f"{_write_png(out)} (carries metadata marking it AI-edited)"
+        f"Face swapped. Result written to: {path} "
+        "(carries metadata marking it AI-edited)"
     )
 
 
