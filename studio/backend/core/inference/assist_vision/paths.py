@@ -7,11 +7,14 @@ Returns ``(bytes, None)`` or ``(None, error_text)`` and never raises: the tool
 boundary returns strings, so a raised exception would escape into the agent
 loop instead of becoming something the model can read and retry.
 
-Confinement, when a ``session_id`` is given, reuses Studio's own sandbox
-machinery from ``core.inference.tools`` (``_get_workdir`` /
-``_is_outside_workdir`` -- the same pair ``edit_file`` resolves paths
-through) rather than inventing a separate home-directory-plus-extra-roots
-model. That import is deferred into the function body: ``tools`` is a large
+Confinement always applies and reuses Studio's own sandbox machinery from
+``core.inference.tools`` (``_get_workdir`` / ``_is_outside_workdir`` -- the
+same pair ``edit_file`` resolves paths through) rather than inventing a
+separate home-directory-plus-extra-roots model. ``_get_workdir`` is
+``None``-safe by Studio's own design (``key = session_id or _ANON_KEY``), so
+there is no ``session_id``-omitted escape hatch: an omitted session still
+resolves to a real (anonymous) sandbox directory and is still confined to it.
+The ``tools`` import is deferred into the function body: ``tools`` is a large
 module that will eventually import this package back (to register the vision
 tools), so importing it at module scope here would be circular.
 """
@@ -24,31 +27,41 @@ _DEFAULT_MAX_BYTES = 26214400  # 25 MiB
 def resolve_image_bytes(path_value, *, session_id = None, max_bytes = _DEFAULT_MAX_BYTES):
     """Resolve ``path_value`` to image bytes. Never raises.
 
-    When ``session_id`` is given, the path is confined to that session's
-    sandbox workdir the same way ``edit_file`` confines writes -- an
-    unconfined image reader feeding a model that echoes content back would
-    otherwise be a file-exfiltration primitive. Callers that omit
-    ``session_id`` get no confinement, which is why every real tool call
-    passes it.
+    The path is always confined to the session's sandbox workdir the same way
+    ``edit_file`` confines writes -- an unconfined image reader feeding a
+    model that echoes content back would otherwise be a file-exfiltration
+    primitive. A relative ``path_value`` is joined onto the workdir before
+    resolution (mirroring ``_edit_file_resolve``'s order of operations) so
+    the natural way a model refers to a file it just created -- a bare
+    filename -- resolves against the sandbox rather than the server process's
+    own current working directory.
     """
     if not path_value or not str(path_value).strip():
         return None, "image_path is required"
 
-    candidate = os.path.abspath(os.path.expanduser(str(path_value).strip()))
+    raw = os.path.expanduser(str(path_value).strip())
 
-    if session_id is not None:
+    try:
+        from core.inference import tools as _tools
+        workdir = _tools._get_workdir(session_id)
+        candidate = raw if os.path.isabs(raw) else os.path.join(workdir, raw)
+        candidate = os.path.abspath(candidate)
+        outside = _tools._is_outside_workdir(candidate, workdir)
+    except Exception as e:
         try:
-            from core.inference import tools as _tools
-            workdir = _tools._get_workdir(session_id)
-            outside = _tools._is_outside_workdir(candidate, workdir)
-        except Exception as e:
-            return None, f"could not confine image_path: {e}"
-        if outside:
-            return None, (
-                f"image_path '{path_value}' is outside this conversation's working "
-                "directory, which is the only place vision tools can read images "
-                "from. Use a path under the working directory."
+            from loggers import get_logger
+            get_logger(__name__).exception(
+                "resolve_image_bytes: confinement check failed for session_id=%r", session_id
             )
+        except Exception:
+            pass  # logging must never be why this function raises
+        return None, f"could not confine image_path: {e}"
+    if outside:
+        return None, (
+            f"image_path '{path_value}' is outside this conversation's working "
+            "directory, which is the only place vision tools can read images "
+            "from. Use a path under the working directory."
+        )
 
     if not os.path.exists(candidate):
         return None, f"image_path not found: {path_value}"

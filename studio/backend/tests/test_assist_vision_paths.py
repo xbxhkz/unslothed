@@ -40,40 +40,45 @@ def workdir(tmp_path, monkeypatch):
 
 
 class TestResolveImageBytes:
-    def test_a_real_file_resolves_to_its_bytes(self, tmp_path):
-        p = _write_png(tmp_path / "a.png")
-        data, err = resolve_image_bytes(str(p))
+    """Every call here goes through the workdir fixture and passes session_id,
+    exactly as test_edit_file_tool.py does for every edit_file test -- there
+    is no unconfined path through resolve_image_bytes to exercise instead.
+    """
+
+    def test_a_real_file_resolves_to_its_bytes(self, workdir):
+        p = _write_png(workdir / "a.png")
+        data, err = resolve_image_bytes(str(p), session_id="t")
         assert err is None
         assert Image.open(io.BytesIO(data)).size == (8, 8)
 
-    def test_a_missing_file_returns_error_text_not_an_exception(self, tmp_path):
-        data, err = resolve_image_bytes(str(tmp_path / "nope.png"))
+    def test_a_missing_file_returns_error_text_not_an_exception(self, workdir):
+        data, err = resolve_image_bytes(str(workdir / "nope.png"), session_id="t")
         assert data is None
         assert "not found" in err.lower()
 
-    def test_a_directory_is_rejected(self, tmp_path):
-        data, err = resolve_image_bytes(str(tmp_path))
+    def test_a_directory_is_rejected(self, workdir):
+        data, err = resolve_image_bytes(str(workdir), session_id="t")
         assert data is None
         assert "not a file" in err.lower()
 
-    def test_an_oversized_file_is_rejected_without_reading_it_all(self, tmp_path):
-        big = tmp_path / "big.png"
+    def test_an_oversized_file_is_rejected_without_reading_it_all(self, workdir):
+        big = workdir / "big.png"
         with open(big, "wb") as f:
             f.seek(1024)
             f.write(b"x")
-        data, err = resolve_image_bytes(str(big), max_bytes=512)
+        data, err = resolve_image_bytes(str(big), session_id="t", max_bytes=512)
         assert data is None
         assert "too large" in err.lower()
 
-    def test_a_non_image_file_is_rejected_with_readable_text(self, tmp_path):
-        junk = tmp_path / "notes.txt"
+    def test_a_non_image_file_is_rejected_with_readable_text(self, workdir):
+        junk = workdir / "notes.txt"
         junk.write_text("this is not an image", encoding="utf-8")
-        data, err = resolve_image_bytes(str(junk))
+        data, err = resolve_image_bytes(str(junk), session_id="t")
         assert data is None
         assert "image" in err.lower()
 
-    def test_an_empty_path_is_rejected(self):
-        data, err = resolve_image_bytes("")
+    def test_an_empty_path_is_rejected(self, workdir):
+        data, err = resolve_image_bytes("", session_id="t")
         assert data is None
         assert err
 
@@ -91,3 +96,23 @@ class TestConfinement:
         data, err = resolve_image_bytes(str(inside), session_id="t")
         assert err is None
         assert data
+
+    def test_a_relative_path_resolves_against_the_workdir(self, workdir):
+        # The natural way a model refers to a file it just created: a bare
+        # filename, not an absolute path. Must join onto the workdir, not the
+        # server process's own cwd (which is what os.path.abspath alone would
+        # have resolved it against).
+        _write_png(workdir / "rel.png")
+        data, err = resolve_image_bytes("rel.png", session_id="t")
+        assert err is None
+        assert data
+
+    def test_session_id_omitted_is_still_confined_to_the_anonymous_workdir(self, tmp_path, workdir):
+        # _get_workdir is None-safe (key = session_id or _ANON_KEY), so an
+        # omitted session_id must still resolve through the same fixture and
+        # be refused for a path outside it -- there is no unconfined default.
+        outside = tmp_path / "outside.png"
+        _write_png(outside)
+        data, err = resolve_image_bytes(str(outside))
+        assert data is None
+        assert err and ("outside" in err.lower() or "not allowed" in err.lower())
