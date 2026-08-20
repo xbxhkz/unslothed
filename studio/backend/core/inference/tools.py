@@ -9801,6 +9801,8 @@ SEARCH_CONVERSATION_TOOL = {
     },
 }
 
+from core.inference.assist_vision import ASSIST_VISION_TOOLS, ASSIST_VISION_TOOL_NAMES
+
 ALL_TOOLS = [
     WEB_SEARCH_TOOL,
     PYTHON_TOOL,
@@ -9809,6 +9811,7 @@ ALL_TOOLS = [
     RENDER_HTML_TOOL,
     SEARCH_KNOWLEDGE_BASE_TOOL,
     SEARCH_CONVERSATION_TOOL,
+    *ASSIST_VISION_TOOLS,
 ]
 
 
@@ -10026,6 +10029,9 @@ def execute_tool(
     ``website_policy``: hidden server-validated domain limits for web_search.
     """
     logger.info(f"execute_tool: name={name}, session_id={session_id}, timeout={timeout}")
+    if name in ASSIST_VISION_TOOL_NAMES:
+        from core.inference import assist_vision
+        return assist_vision.execute(name, arguments, session_id = session_id)
     effective_timeout = _EXEC_TIMEOUT if timeout is _TIMEOUT_UNSET else timeout
     if name == "search_knowledge_base":
         return _search_knowledge_base_with_budget(
