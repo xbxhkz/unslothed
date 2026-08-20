@@ -3,13 +3,12 @@
 
 """Background removal via a bundled U2Net ONNX model.
 
-No rembg/transformers dependency: rembg is Windows-unsupported in this app's
-own Cookbook UI (static/js/cookbook.js's _winUnsupported set), and the
-frozen build has no pip available at runtime to install either. Mirrors
-src/vision/yolo.py's lazy-singleton + injectable-session pattern so tests
-never need the real model file, which only exists after
-scripts/fetch_bg_removal_model.py runs at build time. See
-docs/superpowers/specs/2026-08-12-image-editing-background-removal-design.md.
+No rembg/transformers dependency: rembg pulls in a large extra dependency
+tree this app avoids, and a frozen build has no pip available at runtime to
+install anything at all. Mirrors the lazy-singleton + injectable-session
+pattern used by the sibling ``core/inference/assist_vision/yolo.py`` module
+so tests exercise the real pre/post-processing without needing the 168 MB
+weight file, which is fetched separately and does not ship with the repo.
 """
 import io
 import os
@@ -33,11 +32,9 @@ def _get_session():
     if _session is None:
         path = _model_path()
         # Checked BEFORE importing onnxruntime / constructing the session so a
-        # dev environment where the build-time fetch never ran gets a specific,
-        # actionable error instead of a raw onnxruntime "No such file" (or an
-        # ImportError that hides the real problem). Mirrors
-        # src/localmodels/runtime.py's "run scripts/fetch_llama_server.py"
-        # message for the same class of missing build asset.
+        # dev environment where the weight file was never downloaded gets a
+        # specific, actionable error instead of a raw onnxruntime "No such
+        # file" (or an ImportError that hides the real problem).
         if not os.path.isfile(path):
             raise RuntimeError(
                 f"U2Net model not found at {path}. Download u2net.onnx into "
@@ -64,14 +61,7 @@ def remove_background(image_bytes: bytes, *, session=None) -> bytes:
     original_size = img.size
 
     sess = session or _get_session()
-    # get_inputs() is part of onnxruntime.InferenceSession's real API and is
-    # used when available so the input tensor is always addressed by its
-    # actual name. Injected test doubles are allowed to implement only
-    # .run() (the minimal surface this function needs), so a session lacking
-    # get_inputs() falls back to a fixed key -- harmless for such doubles,
-    # which don't care what key they receive.
-    get_inputs = getattr(sess, "get_inputs", None)
-    input_name = get_inputs()[0].name if get_inputs else "input"
+    input_name = sess.get_inputs()[0].name
     output = sess.run(None, {input_name: _preprocess(img)})[0]
 
     mask = output[0][0]

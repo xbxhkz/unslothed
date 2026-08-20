@@ -20,8 +20,15 @@ from PIL import Image
 from core.inference.assist_vision.bg_removal import remove_background
 
 
+class _Input:
+    name = "input"
+
+
 class _HalfMaskSession:
     """Returns a mask that keeps the left half and drops the right half."""
+
+    def get_inputs(self):
+        return [_Input()]
 
     def run(self, output_names, input_feed):
         arr = next(iter(input_feed.values()))
