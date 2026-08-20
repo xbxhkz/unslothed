@@ -3636,6 +3636,21 @@ async def _select_request_tools(
     else:
         # Copy so the shared module-global tool list can't be mutated by callers.
         tools = list(ALL_TOOLS)
+    # Re-added after the filter for exactly the reason search_conversation is below:
+    # Studio always sends an explicit enabled_tools array, built from a pill-driven
+    # literal in chat-adapter.ts that names only the upstream tools, so the filter
+    # above stripped every vision schema from every Studio chat request and the model
+    # could never call one. They have no pill of their own to be named by. Gated on
+    # tools_on so a tools-off request still gets no built-ins, and de-duplicated so an
+    # omitted allowlist (which already means "all tools") doesn't offer them twice.
+    if tools_on:
+        from core.inference.tools import ASSIST_VISION_TOOL_NAMES
+        _already = {t["function"]["name"] for t in tools}
+        tools = tools + [
+            t for t in ALL_TOOLS
+            if t["function"]["name"] in ASSIST_VISION_TOOL_NAMES
+            and t["function"]["name"] not in _already
+        ]
     # Drop the RAG tool without a scope: nothing to search over.
     if not payload.rag_scope:
         tools = [t for t in tools if t["function"]["name"] != "search_knowledge_base"]
