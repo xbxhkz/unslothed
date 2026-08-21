@@ -3640,10 +3640,24 @@ async def _select_request_tools(
     # Studio always sends an explicit enabled_tools array, built from a pill-driven
     # literal in chat-adapter.ts that names only the upstream tools, so the filter
     # above stripped every vision schema from every Studio chat request and the model
-    # could never call one. They have no pill of their own to be named by. Gated on
-    # tools_on so a tools-off request still gets no built-ins, and de-duplicated so an
-    # omitted allowlist (which already means "all tools") doesn't offer them twice.
-    if tools_on:
+    # could never call one. They have no pill of their own to be named by. De-duplicated
+    # so an omitted allowlist (which already means "all tools") doesn't offer them twice.
+    #
+    # `and tools` is load-bearing, not defensive. An EMPTY selection must stay empty:
+    # that is what lets the guard below skip the tool loop entirely, so the safetensors
+    # loop's "empty means allow all" semantic cannot reach built-ins the caller never
+    # opted into. Re-adding unconditionally made the catalogue never-empty and broke it.
+    # Reachable for real -- a chat with MCP on and every built-in pill off sends
+    # `enabled_tools: []`, and answering that by injecting five tools the user just
+    # switched off is wrong. It also keeps `enabled_tools` satisfiable for third-party
+    # /v1/chat/completions clients, for whom the array is a contract.
+    #
+    # This still fixes the reported bug: Studio's chat only sends the array at all when
+    # some pill is on, so a real chat request carries at least one upstream tool name,
+    # the filter admits it, and the vision schemas ride along. Note the search_conversation
+    # precedent below is gated on a condition too, and justified as read-only and
+    # always-safe -- which these are not: one drives a webcam, one makes deepfakes.
+    if tools_on and tools:
         from core.inference.tools import ASSIST_VISION_TOOL_NAMES
         _already = {t["function"]["name"] for t in tools}
         tools = tools + [

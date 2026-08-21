@@ -75,11 +75,34 @@ class TestStudioAllowlistDoesNotStripVisionTools:
         names = _names(_select(_payload(enabled_tools = ["web_search"])))
         assert ASSIST_VISION_TOOL_NAMES <= set(names)
 
-    def test_an_empty_allowlist_with_tools_on_still_carries_them(self):
-        """`enabled_tools = []` is what Studio sends when every pill it knows
-        about is off but the request is still a tool request."""
+    def test_an_empty_selection_stays_empty(self):
+        """The opposite of what this test originally asserted, and the reason is
+        worth keeping.
+
+        `enabled_tools = []` is reachable: a chat with MCP on and every built-in
+        pill off sends it. The first version of this test claimed the vision
+        tools should ride along anyway. They must not. Upstream relies on an
+        empty selection producing an EMPTY catalogue so the guard further down
+        can skip the tool loop -- that is what stops the safetensors loop's
+        "empty means allow all" semantic from reaching built-ins the caller
+        never opted into. Re-adding unconditionally broke four upstream tests in
+        test_run_tools_locally_discriminator.py.
+
+        Answering "every built-in tool is off" by injecting five of them is also
+        just wrong on its own terms, and it keeps `enabled_tools` satisfiable for
+        third-party /v1/chat/completions clients, for whom the array is a
+        contract.
+        """
         names = _names(_select(_payload(enabled_tools = [])))
-        assert ASSIST_VISION_TOOL_NAMES <= set(names)
+        assert names == [], f"an empty selection must stay empty, got {names}"
+
+    def test_a_selection_of_only_unimplemented_tools_stays_empty(self):
+        """The upstream case the discriminator tests actually exercise:
+        `code_execution` is provider-hosted and has no local implementation, so
+        the filter admits nothing and the catalogue must remain empty rather
+        than being back-filled with vision tools."""
+        names = _names(_select(_payload(enabled_tools = ["code_execution"])))
+        assert names == [], f"unimplemented-only selection must stay empty, got {names}"
 
     def test_the_upstream_tools_the_allowlist_named_are_untouched(self):
         """The re-add must ADD, never replace what the filter admitted."""
