@@ -56,6 +56,47 @@ class TestRegistration:
                 assert tool["function"]["description"].strip()
                 assert tool["function"]["parameters"]["type"] == "object"
 
+    def test_every_path_parameter_states_the_real_path_contract(self):
+        """Asserting a non-empty description passes against wording that
+        actively misleads the model. Paths are confined to the working
+        directory, and a bare filename is the form that reliably works -- the
+        old text said "absolute path on this machine", pointing at the case
+        most likely to be REFUSED."""
+        checked = 0
+        for tool in ALL_TOOLS:
+            fn = tool["function"]
+            if fn["name"] not in _NAMES:
+                continue
+            for param, spec in fn["parameters"].get("properties", {}).items():
+                if not param.endswith("_path"):
+                    continue
+                desc = spec["description"].lower()
+                checked += 1
+                assert "working directory" in desc, (
+                    f"{fn['name']}.{param} does not state the confinement rule"
+                )
+                assert "bare filename" in desc, (
+                    f"{fn['name']}.{param} never mentions the form that works"
+                )
+                assert "absolute path" not in desc, (
+                    f"{fn['name']}.{param} still steers the model at absolute paths"
+                )
+        # image_path on remove_background / detect_shapes / edit_image_prompt,
+        # plus face_swap's source_face_path and target_image_path.
+        assert checked == 5, f"expected 5 path parameters, checked {checked}"
+
+    def test_tools_that_may_download_a_model_say_so(self):
+        """A multi-hundred-MB fetch triggered by a chat message must be
+        disclosed to the model, so it can pass that on before committing the
+        user to it."""
+        downloads = {"remove_background", "detect_shapes", "webcam_look"}
+        for tool in ALL_TOOLS:
+            fn = tool["function"]
+            if fn["name"] in downloads:
+                assert "download" in fn["description"].lower(), (
+                    f"{fn['name']} may download a model without saying so"
+                )
+
     def test_the_upstream_tool_names_are_not_disturbed(self):
         """The two-line edit must ADD tools, never replace Studio's own."""
         names = {t["function"]["name"] for t in ALL_TOOLS}

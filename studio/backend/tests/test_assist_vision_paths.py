@@ -75,7 +75,11 @@ class TestResolveImageBytes:
         junk.write_text("this is not an image", encoding="utf-8")
         data, err = resolve_image_bytes(str(junk), session_id="t")
         assert data is None
-        assert "image" in err.lower()
+        # `"image" in err` passed for EVERY error this function returns -- they
+        # all contain "image_path" -- so it could not tell "not an image" from
+        # "not found". Assert the distinguishing phrase instead.
+        assert "not a readable image" in err.lower(), err
+        assert "not found" not in err.lower()
 
     def test_an_empty_path_is_rejected(self, workdir):
         data, err = resolve_image_bytes("", session_id="t")

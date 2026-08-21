@@ -1,11 +1,30 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""OpenAI-style schemas for the vision tools, shaped like Studio's own."""
+"""OpenAI-style schemas for the vision tools, shaped like Studio's own.
+
+Two things these descriptions must get right, because the model has no other
+way to learn them:
+
+1. The PATH CONTRACT. Every image path is confined to the conversation's
+   working directory. The old wording ("Absolute path to an image file on this
+   machine") pointed the model at the one case most likely to be REFUSED, and
+   never mentioned the bare filename that reliably works.
+2. FIRST-USE DOWNLOADS. Three of these tools may fetch a model the first time
+   they run. Saying so here is what makes the fetch disclosed to the user
+   rather than a surprise the assistant triggered on their behalf.
+"""
+
+_PATH_CONTRACT = (
+    "The file must be inside this conversation's working directory -- that is "
+    "the only place these tools can read images from. A bare filename (e.g. "
+    "'photo.png') resolves there and is the normal way to refer to a file you "
+    "or the user just created; a path pointing outside it is refused."
+)
 
 _IMAGE_PATH = {
     "type": "string",
-    "description": "Absolute path to an image file on this machine.",
+    "description": f"Path to an image file. {_PATH_CONTRACT}",
 }
 
 REMOVE_BACKGROUND_TOOL = {
@@ -14,7 +33,8 @@ REMOVE_BACKGROUND_TOOL = {
         "name": "remove_background",
         "description": (
             "Remove the background from an image, returning a transparent PNG. "
-            "Returns the path of the written file."
+            "Returns the path of the written file, inside the conversation's "
+            "working directory. The first use may download a ~176 MB model."
         ),
         "parameters": {
             "type": "object",
@@ -31,7 +51,8 @@ DETECT_SHAPES_TOOL = {
         "description": (
             "Detect and identify subjects (people, animals, objects) in a photo. "
             "Returns what was found with confidence and rough position, plus the "
-            "path of an annotated copy. Finding nothing is a normal result."
+            "path of an annotated copy. Finding nothing is a normal result. "
+            "The first use may download a ~170 MB model."
         ),
         "parameters": {
             "type": "object",
@@ -47,7 +68,8 @@ WEBCAM_LOOK_TOOL = {
         "name": "webcam_look",
         "description": (
             "Capture a frame from the local webcam and identify objects in it. "
-            "Returns what was found plus the path of an annotated image."
+            "Returns what was found plus the path of an annotated image. "
+            "The first use may download a ~6 MB model."
         ),
         "parameters": {
             "type": "object",
@@ -102,11 +124,15 @@ FACE_SWAP_TOOL = {
             "properties": {
                 "source_face_path": {
                     "type": "string",
-                    "description": "Absolute path to the image containing the source face.",
+                    "description": (
+                        f"Path to the image containing the source face. {_PATH_CONTRACT}"
+                    ),
                 },
                 "target_image_path": {
                     "type": "string",
-                    "description": "Absolute path to the image to swap the face into.",
+                    "description": (
+                        f"Path to the image to swap the face into. {_PATH_CONTRACT}"
+                    ),
                 },
             },
             "required": ["source_face_path", "target_image_path"],
