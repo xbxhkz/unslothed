@@ -1,14 +1,22 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
-"""Background removal via a bundled U2Net ONNX model.
+"""Background removal via a U2Net ONNX model, downloaded on first use.
 
 No rembg/transformers dependency: rembg pulls in a large extra dependency
 tree this app avoids, and a frozen build has no pip available at runtime to
 install anything at all. Mirrors the lazy-singleton + injectable-session
 pattern used by the sibling ``core/inference/assist_vision/yolo.py`` module
-so tests exercise the real pre/post-processing without needing the 168 MB
-weight file, which is fetched separately and does not ship with the repo.
+so tests exercise the real pre/post-processing without needing the weight
+file at all.
+
+The weights are NOT bundled. The spec once claimed they were, but no
+``weights/`` directory ever existed and nothing created one, so this tool
+failed on every install with "U2Net model not found". Shipping a 168 MB
+binary inside a fork that must absorb every upstream release is the wrong
+trade, so it is fetched on first use instead -- the same thing
+``detect_shapes`` already does for its torchvision weights -- and the fetch
+is announced in the log before it starts, never silent.
 """
 import io
 import os
@@ -16,30 +24,49 @@ import os
 import numpy as np
 from PIL import Image
 
+from .models import download_model, model_path
+
 _MODEL_INPUT_SIZE = 320  # U2Net's standard input resolution
+_MODEL_FILENAME = "u2net.onnx"
+_MODEL_SIZE_BYTES = 176 * 1024 * 1024
+# U2Net's canonical public distribution: the release assets rembg itself
+# pulls from, which is where this weight file is published for general use.
+_MODEL_URL = (
+    "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net.onnx"
+)
+_PATH_ENV = "UNSLOTH_U2NET_PATH"
+
 _session = None
 
 
 def _model_path() -> str:
-    override = os.environ.get("UNSLOTH_U2NET_PATH")
+    """An explicit override wins; otherwise the shared model cache."""
+    override = os.environ.get(_PATH_ENV)
     if override:
         return override
-    return os.path.join(os.path.dirname(__file__), "weights", "u2net.onnx")
+    return model_path(_MODEL_FILENAME)
 
 
 def _get_session():
     global _session
     if _session is None:
         path = _model_path()
-        # Checked BEFORE importing onnxruntime / constructing the session so a
-        # dev environment where the weight file was never downloaded gets a
-        # specific, actionable error instead of a raw onnxruntime "No such
-        # file" (or an ImportError that hides the real problem).
         if not os.path.isfile(path):
-            raise RuntimeError(
-                f"U2Net model not found at {path}. Download u2net.onnx into "
-                "that folder or set UNSLOTH_U2NET_PATH."
+            if os.environ.get(_PATH_ENV):
+                # An override that points at nothing is a user mistake, not a
+                # cue to download somewhere they did not ask for.
+                raise RuntimeError(
+                    f"{_PATH_ENV} is set to {path}, but no file is there. "
+                    "Point it at u2net.onnx or unset it to download the model "
+                    "automatically."
+                )
+            # Raises with the file, the URL and the env var named on failure.
+            path = download_model(
+                _MODEL_URL, _MODEL_FILENAME,
+                size_bytes = _MODEL_SIZE_BYTES, env_var = _PATH_ENV,
             )
+        # Imported only once a real file exists, so a missing weight reports
+        # itself rather than surfacing as a raw onnxruntime "No such file".
         import onnxruntime
         _session = onnxruntime.InferenceSession(path)
     return _session

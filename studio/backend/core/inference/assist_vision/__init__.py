@@ -62,19 +62,19 @@ def _do_remove_background(arguments, session_id):
     return f"Background removed. Transparent PNG written to: {path}"
 
 
-def _describe(dets):
-    """One line per label group, or a plain not-found line. Never 'error'."""
-    if not dets:
-        return "No recognizable objects detected."
-    groups = {}
-    for d in dets:
-        groups.setdefault(d["label"], []).append(d)
-    parts = []
-    for label, items in groups.items():
-        confs = ", ".join(f"{int(i['confidence'] * 100)}%" for i in items)
-        positions = ", ".join(sorted({i["position"] for i in items}))
-        parts.append(f"{len(items)} {label} ({confs}; {positions})")
-    return ", ".join(parts)
+def _annotated_line(image_bytes, dets, session_id, name):
+    """The 'Annotated image written to: ...' line, or nothing.
+
+    ``annotate`` returns None when the image cannot be decoded or re-encoded.
+    Reporting findings without an annotated copy is the honest outcome there;
+    the detections themselves are still good.
+    """
+    from . import yolo
+
+    annotated = yolo.annotate(image_bytes, dets, ".png")
+    if annotated is None:
+        return "\n(Could not render an annotated copy of this image.)"
+    return f"\nAnnotated image written to: {_write_png(annotated, session_id, name)}"
 
 
 def _do_detect_shapes(arguments, session_id):
@@ -85,12 +85,14 @@ def _do_detect_shapes(arguments, session_id):
     if err:
         return f"detect_shapes failed: {err}"
     dets = shape_detect.detect(data)
-    summary = _describe(dets)
+    # yolo.summarize, not a near-copy of it: the local duplicate lacked
+    # pluralisation, so detect_shapes said "2 person" where webcam_look said
+    # "2 people" for the same picture. shape_detect's detections already carry
+    # exactly the keys summarize reads.
+    summary = yolo.summarize(dets)
     if not dets:
         return summary
-    annotated = yolo.annotate(data, dets, ".png")
-    path = _write_png(annotated, session_id, "detect_shapes")
-    return f"{summary}\nAnnotated image written to: {path}"
+    return summary + _annotated_line(data, dets, session_id, "detect_shapes")
 
 
 def _do_webcam_look(arguments, session_id):
@@ -102,9 +104,7 @@ def _do_webcam_look(arguments, session_id):
     summary = yolo.summarize(dets)
     if not dets:
         return summary
-    annotated = yolo.annotate(frame, dets, ".png")
-    path = _write_png(annotated, session_id, "webcam_look")
-    return f"{summary}\nAnnotated image written to: {path}"
+    return summary + _annotated_line(frame, dets, session_id, "webcam_look")
 
 
 def _do_edit_image_prompt(arguments, session_id):

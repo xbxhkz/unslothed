@@ -107,3 +107,67 @@ class TestWebcamAndYolo:
 
     def test_summarize_reports_nothing_found_without_raising(self):
         assert "no recognizable" in yolo.summarize([]).lower()
+
+    def test_capture_encodes_without_cv2_when_a_grabber_is_injected(self, monkeypatch):
+        """The grabber seam exists so this runs with no camera -- and so it must
+        also run with no OpenCV. An unconditional `import cv2` on the encode
+        step defeated that on any machine without it."""
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _no_cv2(name, *args, **kwargs):
+            if name == "cv2":
+                raise ImportError("No module named 'cv2'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _no_cv2)
+        frame = np.zeros((8, 8, 3), dtype = np.uint8)
+        data = webcam.capture_frame_jpeg(grabber = lambda index: frame)
+        assert data[:2] == b"\xff\xd8", "should still be a JPEG via the PIL fallback"
+
+
+class TestAnnotate:
+    """Direct coverage for the drawing step on the success path of two of the
+    five tools, which had none."""
+
+    def _jpeg(self, size = (40, 30)):
+        buf = io.BytesIO()
+        Image.new("RGB", size, (30, 30, 30)).save(buf, format = "JPEG")
+        return buf.getvalue()
+
+    def _dets(self):
+        return [{"label": "person", "confidence": 0.91, "box": [2, 2, 20, 20],
+                 "position": "top-left"}]
+
+    def test_it_returns_decodable_image_bytes_in_the_requested_format(self):
+        out = yolo.annotate(self._jpeg(), self._dets(), ".png")
+        assert out is not None
+        assert Image.open(io.BytesIO(out)).format == "PNG"
+
+    def test_the_default_format_is_jpeg(self):
+        out = yolo.annotate(self._jpeg(), self._dets())
+        assert Image.open(io.BytesIO(out)).format == "JPEG"
+
+    def test_it_actually_draws_something(self):
+        """Fails if the boxes are computed but never rendered."""
+        plain = self._jpeg()
+        out = yolo.annotate(plain, self._dets(), ".png")
+        before = np.asarray(Image.open(io.BytesIO(plain)).convert("RGB"))
+        after = np.asarray(Image.open(io.BytesIO(out)).convert("RGB"))
+        assert after.shape == before.shape
+        assert not np.array_equal(before, after), "no pixels changed"
+
+    def test_the_annotated_size_matches_the_source(self):
+        out = yolo.annotate(self._jpeg(size = (64, 48)), self._dets(), ".png")
+        assert Image.open(io.BytesIO(out)).size == (64, 48)
+
+    def test_undecodable_input_returns_none_not_the_original_bytes(self):
+        """Returning the input made the caller write a JPEG/WEBP under a .png
+        name -- a file that then failed to open for whatever read it next."""
+        assert yolo.annotate(b"not an image at all", self._dets(), ".png") is None
+
+    def test_zero_detections_still_produces_an_image(self):
+        out = yolo.annotate(self._jpeg(), [], ".png")
+        assert out is not None
+        assert Image.open(io.BytesIO(out)).format == "PNG"

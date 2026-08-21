@@ -2,59 +2,54 @@
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 
 """YOLO object detection on a JPEG frame: detect -> annotate -> summarize.
-The model is a lazy singleton (ultralytics). Formatting is split into the pure
-`format_detections`/`summarize`/`_position` helpers so tests need no ultralytics."""
+The model is a lazy singleton (ultralytics). Formatting lives in the shared
+`models` module, so tests need no ultralytics and both detectors phrase their
+findings identically.
+
+First use may DOWNLOAD the ~6 MB yolov8n weights. ultralytics fetches them
+implicitly from a bare filename, which used to happen with nothing said about
+it; `_get_model` now logs the fetch before letting it start."""
 import logging
 import os
-from collections import OrderedDict
+
+from .models import format_detections, model_path, position as _position, summarize  # noqa: F401
 
 logger = logging.getLogger(__name__)
+
+_WEIGHTS_FILENAME = "yolov8n.pt"
+_WEIGHTS_SIZE_BYTES = 6 * 1024 * 1024
 
 _model = None
 
 
-def _position(cx, cy, w, h):
-    col = "left" if cx < w / 3 else ("right" if cx > 2 * w / 3 else "center")
-    row = "top" if cy < h / 3 else ("bottom" if cy > 2 * h / 3 else "middle")
-    if row == "middle" and col == "center":
-        return "center"
-    if row == "middle":
-        return col
-    if col == "center":
-        return row
-    return f"{row}-{col}"
-
-
 def weights_path():
-    """Bundled yolov8n.pt path if present next to this module, else
-    'yolov8n.pt' (ultralytics then resolves/downloads it)."""
-    p = os.path.join(os.path.dirname(__file__), "weights", "yolov8n.pt")
-    return p if os.path.isfile(p) else "yolov8n.pt"
+    """Where yolov8n.pt should be loaded from.
+
+    Prefers a copy already in the shared model cache; falls back to the bare
+    filename, which is ultralytics' cue to resolve and download it. The bare
+    string is deliberate, not an oversight -- but the caller announces it, so
+    the download is no longer silent.
+    """
+    cached = model_path(_WEIGHTS_FILENAME)
+    return cached if os.path.isfile(cached) else _WEIGHTS_FILENAME
 
 
 def _get_model():
     global _model
     if _model is None:
+        path = weights_path()
+        if not os.path.isfile(path):
+            # Disclosed before ultralytics is even imported, so the log line
+            # precedes the network call rather than trailing it.
+            logger.info(
+                "assist_vision: ultralytics will download %s (~6 MB) on first "
+                "use of webcam_look; set UNSLOTH_VISION_MODEL_DIR and place the "
+                "file there to supply it yourself",
+                _WEIGHTS_FILENAME,
+            )
         from ultralytics import YOLO
-        _model = YOLO(weights_path())
+        _model = YOLO(path)
     return _model
-
-
-def format_detections(raw, w, h, conf=0.4):
-    """raw: list of (label, confidence, x1, y1, x2, y2). Filter by conf,
-    round the box, and add a grid position. Pure."""
-    dets = []
-    for label, c, x1, y1, x2, y2 in raw:
-        if float(c) < conf:
-            continue
-        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-        dets.append({
-            "label": label,
-            "confidence": round(float(c), 2),
-            "box": [round(x1), round(y1), round(x2), round(y2)],
-            "position": _position(cx, cy, w, h),
-        })
-    return dets
 
 
 def detect(jpeg, *, model=None, conf=0.4):
@@ -79,13 +74,19 @@ def annotate(jpeg, dets, fmt=".jpg"):
     """Draw boxes + labels -> encoded image bytes in `fmt` (default JPEG,
     matching this module's original convention; pass fmt=".png" for callers
     that need PNG, e.g. shape_detect's save convention, which -- like every
-    other image tool in this app -- persists PNGs). Returns the input on
-    decode failure."""
+    other image tool in this app -- persists PNGs).
+
+    Returns None when the image cannot be decoded or re-encoded, rather than
+    handing back the input unchanged: callers write the result under a .png
+    name, so returning the original produced a JPEG/WEBP with a .png
+    extension -- a file that then failed to open for whatever read it next.
+    Callers report their findings without an annotated copy instead.
+    """
     import cv2
     import numpy as np
     arr = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
     if arr is None:
-        return jpeg
+        return None
     for d in dets:
         x1, y1, x2, y2 = d["box"]
         cv2.rectangle(arr, (int(x1), int(y1)), (int(x2), int(y2)), (0, 200, 0), 2)
@@ -93,27 +94,4 @@ def annotate(jpeg, dets, fmt=".jpg"):
                     (int(x1), max(0, int(y1) - 6)), cv2.FONT_HERSHEY_SIMPLEX,
                     0.5, (0, 200, 0), 1)
     ok, buf = cv2.imencode(fmt, arr)
-    return bytes(buf.tobytes()) if ok else jpeg
-
-
-def _plural(label):
-    if label == "person":
-        return "people"
-    return label if label.endswith("s") else label + "s"
-
-
-def summarize(dets):
-    """Group by label with counts, confidences, and positions -> one line."""
-    if not dets:
-        return "No recognizable objects detected."
-    groups = OrderedDict()
-    for d in dets:
-        groups.setdefault(d["label"], []).append(d)
-    parts = []
-    for label, items in groups.items():
-        n = len(items)
-        confs = ", ".join(f"{int(i['confidence'] * 100)}%" for i in items)
-        pos = ", ".join(sorted({i["position"] for i in items}))
-        name = label if n == 1 else _plural(label)
-        parts.append(f"{n} {name} ({confs}; {pos})")
-    return ", ".join(parts)
+    return bytes(buf.tobytes()) if ok else None

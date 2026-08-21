@@ -34,6 +34,8 @@ import numpy as np
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
+from .models import model_root as _model_root
+
 _MODEL_PACK_NAME = "buffalo_l"
 _SWAP_MODEL_FILENAME = "inswapper_128.onnx"
 
@@ -49,13 +51,6 @@ class LicenseNotAcceptedError(Exception):
 
 class NoFaceDetectedError(Exception):
     """Raised when face detection finds no usable face in an input image."""
-
-
-def _model_root() -> str:
-    override = os.environ.get("UNSLOTH_VISION_MODEL_DIR")
-    if override:
-        return override
-    return os.path.join(os.path.expanduser("~"), ".unsloth", "assist_vision_models")
 
 
 def _licence_marker_path():

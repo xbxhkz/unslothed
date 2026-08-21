@@ -39,28 +39,34 @@ module:
     leaving it to scatter into the user's global ~/.cache/torch.
 """
 import io
+import logging
 import os
 
 import numpy as np
 from PIL import Image
 
+from .models import format_detections as _format_detections, model_root
+
+logger = logging.getLogger(__name__)
+
 _model = None
 _categories = None
-
-
-def _model_root() -> str:
-    override = os.environ.get("UNSLOTH_VISION_MODEL_DIR")
-    if override:
-        return override
-    return os.path.join(os.path.expanduser("~"), ".unsloth", "assist_vision_models")
 
 
 def _get_model():
     global _model, _categories
     if _model is None:
         import torch
-        os.makedirs(_model_root(), exist_ok=True)
-        torch.hub.set_dir(_model_root())
+        os.makedirs(model_root(), exist_ok=True)
+        # Disclosed before the fetch: torchvision pulls ~170 MB of COCO-
+        # pretrained weights the first time this runs, triggered by a chat
+        # message, and a user watching the log should know why.
+        logger.info(
+            "assist_vision: torchvision will download Mask R-CNN weights "
+            "(~170 MB) on first use of detect_shapes, cached in %s",
+            model_root(),
+        )
+        torch.hub.set_dir(model_root())
         from torchvision.models.detection import maskrcnn_resnet50_fpn, MaskRCNN_ResNet50_FPN_Weights
         weights = MaskRCNN_ResNet50_FPN_Weights.DEFAULT
         _categories = list(weights.meta["categories"])
@@ -82,36 +88,6 @@ def _to_numpy(x):
     if hasattr(x, "detach"):
         return x.detach().cpu().numpy()
     return np.asarray(x)
-
-
-def _format_detections(raw, w, h, conf=0.4):
-    """raw: list of (label, confidence, x1, y1, x2, y2, mask). Filter by
-    conf, round the box, add grid position (reusing yolo.py's own
-    _position() so the phrasing matches this package's established
-    language instead of inventing a second convention) and the boolean
-    instance mask. Also numbers each detection per label (person #1, person
-    #2, dog #1, ...) via a running per-label counter over the
-    already-ordered `raw` list -- not used by this module's own text
-    output, but the exact shape a future shape-swap capability needs to
-    disambiguate "swap the 2nd person" without a later breaking change.
-    Pure."""
-    from core.inference.assist_vision.yolo import _position
-    dets = []
-    counts = {}
-    for label, c, x1, y1, x2, y2, mask in raw:
-        if float(c) < conf:
-            continue
-        cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-        counts[label] = counts.get(label, 0) + 1
-        dets.append({
-            "label": label,
-            "index": counts[label],
-            "confidence": round(float(c), 2),
-            "box": [round(x1), round(y1), round(x2), round(y2)],
-            "position": _position(cx, cy, w, h),
-            "mask": mask,
-        })
-    return dets
 
 
 def detect(image_bytes, *, model=None, categories=None, conf=0.4):
