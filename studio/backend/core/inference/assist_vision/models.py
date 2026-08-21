@@ -59,6 +59,22 @@ def _human(size_bytes):
     return f"~{mb:.0f} MB"
 
 
+def _declared_length(response):
+    """``Content-Length`` as an int, or None when it isn't usable.
+
+    None means "cannot verify" -- a server that omits the header, a chunked
+    response, or a test double with no headers at all. The caller skips the
+    size check in that case rather than failing a download it cannot judge.
+    """
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    try:
+        return int(headers.get("Content-Length"))
+    except (TypeError, ValueError):
+        return None
+
+
 def download_model(url, filename, *, size_bytes = None, env_var = None, _opener = None):
     """Fetch ``url`` into ``model_root()/filename`` once, and say so out loud.
 
@@ -67,7 +83,9 @@ def download_model(url, filename, *, size_bytes = None, env_var = None, _opener 
 
     Downloads to a temp file in the same directory and renames, so an install
     interrupted halfway cannot leave a truncated file that later loads as a
-    corrupt model.
+    corrupt model. The byte count is checked against ``Content-Length`` before
+    the rename, because a dropped connection does NOT raise -- see the comment
+    at the check itself.
 
     ``_opener`` is a test seam (``callable(url) -> file-like``); production
     always uses ``urllib.request.urlopen``. It exists so the disclosure and
@@ -92,6 +110,19 @@ def download_model(url, filename, *, size_bytes = None, env_var = None, _opener 
     try:
         with open_url(url) as response, open(tmp_path, "wb") as out:
             shutil.copyfileobj(response, out)
+            written = out.tell()
+            expected = _declared_length(response)
+        # A dropped connection mid-transfer does NOT raise: copyfileobj asks for
+        # an explicit amount, and http.client's read(amt) returns short and
+        # closes rather than raising IncompleteRead ("it might break
+        # compatibility", says its own source). Without this check a truncated
+        # fetch gets renamed into place looking complete, and because the
+        # isfile() short-circuit above never re-fetches, every later call loads
+        # the corrupt file and dies inside the model runtime -- fixable only by
+        # deleting a file the user does not know exists. On a ~176 MB download
+        # that is not a rare event.
+        if expected is not None and written != expected:
+            raise OSError(f"transfer ended after {written} of {expected} bytes")
         os.replace(tmp_path, dest)
     except Exception as e:
         try:

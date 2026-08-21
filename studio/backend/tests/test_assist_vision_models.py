@@ -156,6 +156,76 @@ class TestDownloadDisclosure:
         )
 
 
+class _ShortResponse(io.BytesIO):
+    """A response that ends early WITHOUT raising, the way a real one does.
+
+    This is the case that matters and the one a naive double misses. A dropped
+    connection does not surface as an exception: ``copyfileobj`` asks
+    ``read(amt)`` for an explicit amount, and ``http.client``'s ``read(amt)``
+    returns short and closes rather than raising ``IncompleteRead`` -- its own
+    source says raising "might break compatibility". So the bytes simply stop
+    and every layer above believes the transfer succeeded.
+    """
+
+    def __init__(self, payload, declared):
+        super().__init__(payload)
+        self.headers = {"Content-Length": str(declared)}
+
+
+class TestTruncatedDownloadsAreRejected:
+    def test_a_short_transfer_does_not_land_at_the_destination(self, model_dir):
+        """The bug this guards: a half-finished fetch renamed into place looks
+        complete forever, because download_model short-circuits on isfile()."""
+        with pytest.raises(RuntimeError):
+            models.download_model(
+                "https://example.invalid/u2net.onnx", "u2net.onnx",
+                _opener = lambda url: _ShortResponse(b"only-the-first-part", 176_000_000),
+            )
+        assert not (model_dir / "u2net.onnx").exists(), (
+            "a truncated model was renamed into place and would load as corrupt "
+            "on every later call, with nothing to re-fetch it"
+        )
+        assert not list(model_dir.glob(".u2net.onnx.*")), "temp file left behind"
+
+    def test_the_failure_says_how_far_it_got(self, model_dir):
+        with pytest.raises(RuntimeError) as excinfo:
+            models.download_model(
+                "https://example.invalid/m.bin", "m.bin",
+                env_var = "UNSLOTH_U2NET_PATH",
+                _opener = lambda url: _ShortResponse(b"12345", 99),
+            )
+        msg = str(excinfo.value)
+        assert "5" in msg and "99" in msg, f"failure does not say how far it got: {msg}"
+        assert "UNSLOTH_U2NET_PATH" in msg
+
+    def test_a_complete_transfer_still_succeeds(self, model_dir):
+        """The check must not reject a download that actually finished."""
+        models.download_model(
+            "https://example.invalid/m.bin", "m.bin",
+            _opener = lambda url: _ShortResponse(b"weights", 7),
+        )
+        assert (model_dir / "m.bin").read_bytes() == b"weights"
+
+    def test_a_response_without_content_length_is_still_accepted(self, model_dir):
+        """None means "cannot verify", not "reject": chunked responses and
+        servers that omit the header must keep working."""
+        models.download_model(
+            "https://example.invalid/m.bin", "m.bin",
+            _opener = lambda url: io.BytesIO(b"weights"),
+        )
+        assert (model_dir / "m.bin").read_bytes() == b"weights"
+
+    def test_an_unparseable_content_length_is_treated_as_unverifiable(self, model_dir):
+        class _Weird(io.BytesIO):
+            headers = {"Content-Length": "banana"}
+
+        models.download_model(
+            "https://example.invalid/m.bin", "m.bin",
+            _opener = lambda url: _Weird(b"weights"),
+        )
+        assert (model_dir / "m.bin").read_bytes() == b"weights"
+
+
 class TestPosition:
     """Direct coverage for the helper BOTH detectors phrase their output with,
     which previously had none."""
