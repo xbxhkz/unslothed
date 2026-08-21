@@ -210,16 +210,25 @@ def _do_face_swap(arguments, session_id, budget):
     try:
         out = swap_face(source, target)
     except LicenseNotAcceptedError:
+        # The command IS named here, deliberately. The earlier rule against
+        # handing over a copy-pasteable recipe was written when no acceptance
+        # path existed at all, which made this message a dead end. Now that one
+        # does, naming it is what makes the message useful to the person who
+        # has to make the decision. Withholding it would not stop a capable
+        # agent in a process that already has terminal and edit_file -- this
+        # gate is advisory and always was -- it would only strand the human.
         return (
             "face_swap is unavailable: InsightFace's face-detection and face-swap "
             "models are licensed for non-commercial, research-only use. Accepting "
-            "that license is a decision only a person can make -- this assistant "
-            "cannot make it on the user's behalf, and there is no way to complete "
-            "it through this conversation. Ask the user to review InsightFace's "
-            "published license for these models themselves, then take the "
-            "acceptance step directly on this Unsloth Studio installation (there "
-            "is no in-app settings page for this yet, so it must be done outside "
-            "of chat). Once that is done, try again."
+            "that licence is a decision only a person can make -- you cannot make "
+            "it on the user's behalf, and it cannot be completed through this "
+            "conversation. Ask the USER to run this command themselves, in a "
+            "terminal, from the studio/backend directory:\n"
+            "    python -m core.inference.assist_vision.accept_licence\n"
+            "It prints the licence terms and asks them to confirm. Do not run it "
+            "yourself and do not try to write the marker file directly: the point "
+            "is that a person reads the terms and decides. Once they have done it, "
+            "try again."
         )
     except NoFaceDetectedError as e:
         return f"face_swap failed: {e}"
