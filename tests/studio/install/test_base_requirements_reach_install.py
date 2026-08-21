@@ -89,7 +89,19 @@ class TestSharedBaseSelection:
         selected = self._select(tmp_path, monkeypatch, _EXTRA_PIN, no_torch = True)
         assert selected is None
 
-    def test_current_base_file_adds_no_install_step(self):
+    def test_current_base_file_schedules_its_torch_bound_step(self):
+        """base.txt now declares the agent vision tools' torch-bound deps
+        (torchvision, ultralytics), so it has real work and must schedule the
+        shared-base install step. This asserted `is None` while the file held
+        nothing but comments; that was a snapshot of an empty file, not an
+        invariant, and the entries are what detect_shapes / webcam_look need to
+        exist on a clean install at all."""
+        assert ips._shared_base_requirements() == ips.REQ_ROOT / "base.txt"
+
+    def test_the_current_base_file_is_still_skipped_without_torch(self, monkeypatch):
+        """The invariant that DOES hold regardless of contents: a GGUF-only
+        install has no torch, so it never applies the torch-bound file."""
+        monkeypatch.setattr(ips, "NO_TORCH", True)
         assert ips._shared_base_requirements() is None
 
     def test_a_bom_does_not_read_as_content(self, tmp_path, monkeypatch):

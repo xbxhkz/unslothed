@@ -53,3 +53,20 @@ pymupdf==1.27.2.3
 # lockstep 1.27.x line makes it a hard dep we do not need for to_markdown().
 pymupdf4llm==0.3.4
 python-docx==1.2.0
+# Agent vision tools. These three are torch-free, so unlike torchvision and
+# ultralytics (base.txt, skipped under NO_TORCH) they live here, where they are
+# installed in every mode -- remove_background and face_swap are ONNX pipelines
+# that work fine on a GGUF-only install. None of them was declared anywhere
+# before, so on a clean install the tools died with ModuleNotFoundError and only
+# worked on dev boxes carrying them from another project.
+#
+# onnxruntime runs U2Net (remove_background) and InsightFace (face_swap). It has
+# been arriving transitively via nothing reliable -- extras.txt only mentions it
+# in a comment about flatbuffers -- so it is named here rather than assumed.
+onnxruntime==1.27.0
+# cv2: webcam capture, and the box/label drawing behind both detectors'
+# annotated output.
+opencv-python==4.13.0.92
+# face_swap only. The models it drives stay licence-gated and are never fetched
+# without explicit acceptance; this declares the library, not the weights.
+insightface==1.0.1
