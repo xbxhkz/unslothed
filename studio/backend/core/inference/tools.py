@@ -10029,10 +10029,13 @@ def execute_tool(
     ``website_policy``: hidden server-validated domain limits for web_search.
     """
     logger.info(f"execute_tool: name={name}, session_id={session_id}, timeout={timeout}")
+    effective_timeout = _EXEC_TIMEOUT if timeout is _TIMEOUT_UNSET else timeout
     if name in ASSIST_VISION_TOOL_NAMES:
         from core.inference import assist_vision
-        return assist_vision.execute(name, arguments, session_id = session_id)
-    effective_timeout = _EXEC_TIMEOUT if timeout is _TIMEOUT_UNSET else timeout
+        return assist_vision.execute(
+            name, arguments, session_id = session_id,
+            timeout = effective_timeout, cancel_event = cancel_event,
+        )
     if name == "search_knowledge_base":
         return _search_knowledge_base_with_budget(
             arguments,
