@@ -12,6 +12,7 @@ Timeout and closure are deliberately different exceptions: a slow server should
 be waited on or reported, a dead one must be restarted, and collapsing them
 loses the distinction the caller needs.
 """
+import collections
 import itertools
 import json
 import threading
@@ -74,7 +75,15 @@ class Transport:
         self._lock = threading.Lock()
         self._replies = {}                 # id -> payload
         self._events = {}                  # id -> Event
-        self._notifications = []           # list[(method, params)]
+        # Bounded so a long-lived session against a chatty server (diagnostics
+        # on every edit is the normal case, not the pathological one) can't
+        # grow this without limit. Each entry carries its own monotonic `seq`
+        # rather than relying on positional index, so `wait_notification`
+        # can track "already scanned" correctly even as old entries fall off
+        # the front -- a positional cursor would silently skip an unscanned
+        # entry whose index shifted underneath it.
+        self._note_seq = itertools.count(1)
+        self._notifications = collections.deque(maxlen = 4096)  # (seq, method, params)
         self._note_cv = threading.Condition()
         self._closed = threading.Event()
         self._reader = threading.Thread(
@@ -91,20 +100,35 @@ class Transport:
                 if "id" in msg and ("result" in msg or "error" in msg):
                     mid = msg["id"]
                     with self._lock:
-                        self._replies[mid] = msg
+                        # Only park the reply if someone is still waiting on
+                        # it. A request that already timed out has removed
+                        # its Event (see `request`'s finally); storing the
+                        # reply anyway would leave it in `_replies` forever,
+                        # since nothing will ever come back to collect it.
                         ev = self._events.get(mid)
+                        if ev is not None:
+                            self._replies[mid] = msg
                     if ev is not None:
                         ev.set()
                 elif "method" in msg:
                     with self._note_cv:
-                        self._notifications.append((msg["method"], msg.get("params") or {}))
+                        self._notifications.append(
+                            (next(self._note_seq), msg["method"], msg.get("params") or {})
+                        )
                         self._note_cv.notify_all()
         except Exception:
             pass
         finally:
-            self._closed.set()
-            # Wake everyone waiting; they re-check _closed and raise LspClosed.
+            # Marking closed and snapshotting waiters must be one atomic step
+            # under `self._lock`. `request` checks is_alive() and registers
+            # its Event under the same lock, so a registration can never land
+            # in the gap between "mark closed" and "snapshot" and be missed
+            # by this wake pass -- it either lands before (and is included in
+            # the snapshot below) or after (and `request`'s own is_alive()
+            # check, made under the same lock, already sees us closed and
+            # raises LspClosed without registering an Event at all).
             with self._lock:
+                self._closed.set()
                 events = list(self._events.values())
             for ev in events:
                 ev.set()
@@ -131,11 +155,19 @@ class Transport:
             raise LspClosed(f"server pipe closed: {e}") from e
 
     def request(self, method, params = None, timeout = 30.0):
-        if not self.is_alive():
-            raise LspClosed(f"server is not running (request {method})")
         mid = next(self._ids)
         ev = threading.Event()
         with self._lock:
+            # Atomic with _read_loop's own "mark closed, then snapshot
+            # waiters" step (same lock): either we observe closed here and
+            # raise without ever registering, or we register while still
+            # open and are guaranteed to be included in that snapshot if the
+            # reader dies afterwards. Checking is_alive() and registering as
+            # two separate critical sections left a gap where a reader death
+            # in between was invisible to the wake pass, so the caller waited
+            # out the full timeout and got LspTimeout instead of LspClosed.
+            if not self.is_alive():
+                raise LspClosed(f"server is not running (request {method})")
             self._events[mid] = ev
         try:
             try:
@@ -159,21 +191,42 @@ class Transport:
         finally:
             with self._lock:
                 self._events.pop(mid, None)
+                # Defensive cleanup for the narrow window where the reader
+                # stored a reply for this id (its Event was still registered
+                # at that instant) moments before this pop runs. Without it,
+                # that reply -- for a request nobody is waiting on anymore --
+                # would sit in `_replies` forever: unbounded growth over a
+                # long-lived session against a server that is occasionally
+                # slower than the caller's own timeout (cold-start indexing,
+                # workspace-symbol search on a large repo), which is the
+                # normal case for these servers, not the pathological one.
+                self._replies.pop(mid, None)
 
     def wait_notification(self, method, predicate, timeout = 10.0):
         """Wait for a matching pushed notification. None if it never comes.
 
         Scans already-buffered notifications first: the server may publish
         before we start waiting, and a pure wait would miss it.
+
+        Tracks progress by each notification's own monotonic `seq`, not by a
+        positional index into `_notifications`. `_notifications` is a bounded
+        deque (see __init__): once it is at capacity, an append silently
+        evicts the oldest entry, which shifts every remaining entry's index.
+        A positional cursor left mid-scan across a `.wait()` call would then
+        resume at the wrong offset and silently skip an entry it had not
+        actually looked at yet. Comparing `seq` directly is immune to that
+        shift -- it only skips entries genuinely already seen, never ones
+        still sitting in the buffer.
         """
         import time
         deadline = time.monotonic() + timeout
-        seen = 0
+        last_seq = 0
         with self._note_cv:
             while True:
-                while seen < len(self._notifications):
-                    m, p = self._notifications[seen]
-                    seen += 1
+                for seq, m, p in self._notifications:
+                    if seq <= last_seq:
+                        continue
+                    last_seq = seq
                     if m == method:
                         try:
                             if predicate(p):

@@ -15,11 +15,16 @@ Modes:
   crash    -- exits immediately on the first request
   pull     -- advertises diagnosticProvider and answers textDocument/diagnostic
   noisy    -- emits unsolicited notifications before each reply
+  slow     -- answers initialize (and shutdown) immediately, but delays
+              SLOW_DELAY seconds before answering any other request --
+              a real server that is merely slow, not dead
 """
 import json
 import sys
+import time
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else "normal"
+SLOW_DELAY = 0.8  # seconds; long enough for a short client-side timeout to fire first
 
 
 def _read():
@@ -99,6 +104,9 @@ def main():
 
         if MODE == "wedged":
             continue  # read it, never answer
+
+        if MODE == "slow":
+            time.sleep(SLOW_DELAY)
 
         if method == "textDocument/diagnostic":
             _write({"jsonrpc": "2.0", "id": mid, "result": {"kind": "full", "items": [{
