@@ -36,6 +36,13 @@ def _confine(path_value, session_id, label):
         candidate = os.path.abspath(candidate)
         outside = _tools._is_outside_workdir(candidate, workdir)
     except Exception as e:
+        try:
+            from loggers import get_logger
+            get_logger(__name__).exception(
+                "_confine: confinement check failed for session_id=%r, label=%r", session_id, label
+            )
+        except Exception:
+            pass  # logging must never be why this function raises
         return None, None, f"could not confine {label}: {e}"
     if outside:
         return None, None, (
@@ -85,17 +92,23 @@ def workspace_for(file_path, *, session_id = None):
 
     Climbing past the workdir would hand the server a root outside the sandbox,
     which is exactly what confinement exists to prevent -- so the workdir is
-    both the fallback and the ceiling.
+    both the fallback and the ceiling. Confinement is checked via _is_outside_workdir
+    (with realpath) to catch both string-prefix collisions and symlink/junction escapes.
     """
     try:
         from core.inference import tools as _tools
-        workdir = os.path.abspath(_tools._get_workdir(session_id))
+        workdir = os.path.realpath(_tools._get_workdir(session_id))
     except Exception:
-        return os.path.dirname(os.path.abspath(file_path))
+        return os.path.dirname(os.path.realpath(file_path))
 
-    current = os.path.dirname(os.path.abspath(file_path))
+    current = os.path.realpath(os.path.dirname(file_path))
     while True:
-        if not current.startswith(workdir):
+        try:
+            from core.inference import tools as _tools
+            outside = _tools._is_outside_workdir(current, workdir)
+        except Exception:
+            return workdir
+        if outside:
             return workdir
         if _has_marker(current):
             return current

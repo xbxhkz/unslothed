@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 # Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
 import os
+import subprocess
 import pytest
 from core.inference.assist_code import paths
 
@@ -92,3 +93,69 @@ class TestWorkspaceFor:
         f = workdir / "x" / "a.ts"
         f.write_text("x")
         assert paths.workspace_for(str(f), session_id = "s") == os.path.abspath(str(workdir))
+
+    def test_string_prefix_collision_does_not_escape_confinement(self, workdir, tmp_path_factory):
+        """A sibling directory whose name string-prefixes the workdir must not escape.
+
+        This catches the bug where `str.startswith` was used without a separator boundary.
+        E.g., workdir "...\\session1" would incorrectly match sibling "...\\session1-evil"
+        via `"...\\session1-evil".startswith("...\\session1")`.
+        """
+        # Create a marker inside a sibling that string-prefixes the workdir
+        sibling = workdir.parent / (os.path.basename(str(workdir)) + "-evil")
+        (sibling / "src").mkdir(parents=True)
+        (sibling / "package.json").write_text("{}")
+
+        # File inside the evil sibling
+        f = sibling / "src" / "a.ts"
+        f.write_text("x")
+
+        # Must return the workdir, not the sibling
+        result = paths.workspace_for(str(f), session_id="s")
+        assert result == os.path.abspath(str(workdir)), (
+            f"Expected workdir {os.path.abspath(str(workdir))}, "
+            f"but got {result} (sibling directory escaped confinement)"
+        )
+
+    def test_symlink_junction_escape_is_detected(self, workdir, tmp_path_factory):
+        """A symlink/junction inside the sandbox pointing outside must not escape.
+
+        This catches the bug where only abspath was used, not realpath. Windows junctions
+        inside the sandbox pointing to external directories would be traversed transparently.
+        """
+        # Create an external directory with a marker
+        external = tmp_path_factory.mktemp("external")
+        (external / ".git").mkdir()
+
+        # Create a symlink/junction inside the workdir pointing outside
+        link = workdir / "sneaky_link"
+        link_str = str(link)
+        target_str = str(external)
+
+        try:
+            # Try creating a directory symlink (requires Windows 10+ or Linux)
+            os.symlink(target_str, link_str, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            # Fall back to mklink for older Windows versions
+            try:
+                subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", link_str, target_str],
+                    check=True,
+                    capture_output=True,
+                )
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                pytest.skip("Could not create directory symlink or junction on this system")
+
+        # File inside the external directory via the junction
+        f = link / "a.ts"
+        f.write_text("x")
+
+        # workspace_for should return the workdir, not climb into the external directory
+        result = paths.workspace_for(str(f), session_id="s")
+        result_realpath = os.path.realpath(result)
+        workdir_realpath = os.path.realpath(str(workdir))
+
+        assert result_realpath == workdir_realpath, (
+            f"Expected realpath {workdir_realpath}, "
+            f"but got {result_realpath} (symlink/junction escaped confinement)"
+        )
