@@ -9,7 +9,15 @@ pull request (textDocument/diagnostic) but support is uneven, so the path is
 chosen from what the server advertised at handshake rather than per language.
 
 An empty result is a CLEAN FILE, not a failure -- including when the wait times
-out, because a server with nothing to report may simply publish nothing.
+out, because a server with nothing to report may simply publish nothing. That
+justification is specific to TIMEOUT: a request that simply hasn't answered
+yet is genuinely ambiguous between "still indexing" and "nothing to report."
+A dead transport (``jsonrpc.LspClosed``) or a request the server actively
+rejected (``jsonrpc.LspError``) carry no such ambiguity -- the server told us
+something is wrong, or told us nothing at all because it's gone. Folding
+either into an empty result would report a false clean bill of health, so on
+the pull path only ``jsonrpc.LspTimeout`` is caught; ``LspClosed``/``LspError``
+propagate.
 
 ``collect`` deliberately does NOT catch ``session.DocumentReadError``. A file
 that cannot be read (missing, unreadable, over the size cap) is a different
@@ -46,6 +54,11 @@ def collect(session, file_path, *, timeout = 15.0):
 
     Raises ``session.DocumentReadError`` if ``file_path`` itself could not be
     opened -- see the module docstring for why that is not swallowed here.
+
+    On the pull path, only ``jsonrpc.LspTimeout`` is folded into `[]`.
+    ``jsonrpc.LspClosed`` (dead transport) and ``jsonrpc.LspError`` (the
+    server answered but rejected the request) both propagate -- see the
+    module docstring for why a timeout's ambiguity does not extend to them.
     """
     session.open_document(file_path)
     uri = path_to_uri(file_path)
@@ -57,7 +70,7 @@ def collect(session, file_path, *, timeout = 15.0):
                 {"textDocument": {"uri": uri}},
                 timeout = timeout,
             )
-        except (jsonrpc.LspTimeout, jsonrpc.LspClosed):
+        except jsonrpc.LspTimeout:
             return []
         return _normalise((result or {}).get("items"))
 

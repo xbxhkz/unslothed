@@ -8,9 +8,15 @@ the server sends unbidden -- diagnostics arrive that way -- so the reader
 thread feeds BOTH a response map keyed by request id AND a notification list.
 A design that only models request/response cannot express diagnostics at all.
 
-Timeout and closure are deliberately different exceptions: a slow server should
-be waited on or reported, a dead one must be restarted, and collapsing them
-loses the distinction the caller needs.
+Timeout, closure, and a genuine protocol error are deliberately three
+different exceptions, not one: a slow server should be waited on or
+reported, a dead one must be restarted, and one that answered but rejected
+the request is neither -- it is alive and something specific went wrong.
+Collapsing any of these into another loses a distinction a caller needs
+(``diagnostics.collect()`` treats a timeout as "no answer yet, maybe
+nothing to report" but must not treat a real error the same way).
+``LspError`` is a SIBLING of ``LspClosed``, not a subclass, so existing
+``except LspClosed`` sites do not silently start swallowing it too.
 """
 import collections
 import itertools
@@ -26,6 +32,34 @@ class LspTimeout(Exception):
 
 class LspClosed(Exception):
     """The server exited or its pipes closed."""
+
+
+class LspError(Exception):
+    """The server answered a request with a JSON-RPC error object.
+
+    A SIBLING of ``LspClosed``, not a subclass -- deliberately. Subclassing
+    it would still be caught by every ``except LspClosed`` already written
+    for "the transport is dead, give up or fall back," which is exactly the
+    outcome this type exists to prevent. A JSON-RPC error means the server
+    is alive and answered; something about the request itself failed (bad
+    params, a method-specific failure, ...). That is not the same situation
+    as a dead transport, and code that treats a dead transport as safe to
+    fall back on (e.g. diagnostics.collect() returning [] on the pull path)
+    must not fall back on a genuine error the same way -- a real error
+    swallowed as "clean" is worse than surfacing nothing.
+
+    Carries the server's own error code/message/data so a caller (e.g. the
+    tool layer) can render the underlying failure instead of just this
+    exception's string form.
+    """
+
+    def __init__(self, method, error):
+        error = error or {}
+        self.method = method
+        self.code = error.get("code")
+        self.data = error.get("data")
+        self.server_message = error.get("message")
+        super().__init__(f"{method} failed: {self.server_message or error}")
 
 
 def encode(payload: dict) -> bytes:
@@ -185,8 +219,11 @@ class Transport:
                 # Woken by shutdown rather than by a reply.
                 raise LspClosed(f"server exited while handling {method}")
             if "error" in payload:
-                err = payload["error"] or {}
-                raise LspClosed(f"{method} failed: {err.get('message', err)}")
+                # The server is alive and answered -- it rejected the
+                # request. Not LspClosed: a dead transport and a live
+                # server reporting a real failure are different situations
+                # and callers must be able to react differently to them.
+                raise LspError(method, payload.get("error"))
             return payload.get("result")
         finally:
             with self._lock:

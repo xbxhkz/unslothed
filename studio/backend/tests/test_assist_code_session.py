@@ -45,6 +45,29 @@ class TestHandshake:
             push.close()
             pull.close()
 
+    def test_a_server_that_rejects_initialize_fails_to_start_with_session_start_failed(self, tmp_path):
+        # Regression: jsonrpc.Transport.request() raises the new LspError
+        # (a SIBLING of LspClosed, not a subclass) when the server answers
+        # with a genuine JSON-RPC error object instead of a result -- a
+        # server that is alive and rejected our initialize params, not a
+        # dead transport. start() must still normalise this into
+        # SessionStartFailed like every other handshake failure, not let
+        # the lower-level LspError escape uncaught.
+        s = _session(tmp_path, "init_error")
+        try:
+            with pytest.raises(sess.SessionStartFailed) as e:
+                s.start(timeout = 10)
+            # The underlying LspError's own message should still be
+            # readable in the wrapped SessionStartFailed, not lost --
+            # `raise ... from e` alone doesn't guarantee that; the f-string
+            # in start() does.
+            assert "Invalid params" in str(e.value)
+            # Cause chain: SessionStartFailed was raised from the LspError,
+            # not fabricated independently of it.
+            assert isinstance(e.value.__cause__, jsonrpc.LspError)
+        finally:
+            s.close()
+
     def test_a_server_that_never_answers_initialize_fails_to_start(self, tmp_path):
         # NOTE: brief said "wedged", corrected to "deaf" -- wedged answers
         # initialize and only then goes silent, so start() would succeed and

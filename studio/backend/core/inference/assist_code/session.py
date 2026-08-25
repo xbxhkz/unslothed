@@ -121,15 +121,25 @@ class Session:
                 f"the {self.language} language server did not complete its handshake "
                 f"within {timeout:.0f}s"
             ) from e
-        except jsonrpc.LspClosed as e:
+        except (jsonrpc.LspClosed, jsonrpc.LspError) as e:
+            # LspClosed: the transport died during the handshake. LspError:
+            # the server was alive and answered, but rejected our
+            # `initialize` params outright -- a different failure, but
+            # still one this caller (Task 4's pool `acquire()`) needs to
+            # see as "the handshake did not complete," not something it
+            # tries to distinguish from a dead transport.
             self._teardown_after_failed_start()
             raise SessionStartFailed(
-                f"the {self.language} language server exited during startup: {e}"
+                f"the {self.language} language server failed during the handshake: {e}"
             ) from e
         self.capabilities = (result or {}).get("capabilities", {}) or {}
         try:
             self._transport.notify("initialized", {})
-        except jsonrpc.LspClosed as e:
+        except (jsonrpc.LspClosed, jsonrpc.LspError) as e:
+            # notify() has no reply channel, so it can only ever raise
+            # LspClosed in practice today -- LspError is included here only
+            # to keep both handshake sites uniform against jsonrpc.py ever
+            # growing a code path that raises it from notify() too.
             self._teardown_after_failed_start()
             raise SessionStartFailed(f"server closed right after initialize: {e}") from e
 

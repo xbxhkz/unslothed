@@ -8,16 +8,26 @@ to stdout, so the client's framing, correlation and notification handling are
 genuinely exercised. Behaviour is driven by argv so one file covers every case.
 
 Modes:
-  normal   -- replies to every request; publishes diagnostics on didOpen
-  wedged   -- comes up (answers initialize), then stops answering
-  deaf     -- never comes up: reads messages but never writes anything,
-              not even a reply to initialize
-  crash    -- exits immediately on the first request
-  pull     -- advertises diagnosticProvider and answers textDocument/diagnostic
-  noisy    -- emits unsolicited notifications before each reply
-  slow     -- answers initialize (and shutdown) immediately, but delays
-              SLOW_DELAY seconds before answering any other request --
-              a real server that is merely slow, not dead
+  normal      -- replies to every request; publishes diagnostics on didOpen
+  wedged      -- comes up (answers initialize), then stops answering
+  deaf        -- never comes up: reads messages but never writes anything,
+                 not even a reply to initialize
+  crash       -- exits immediately on the first request
+  pull        -- advertises diagnosticProvider and answers textDocument/diagnostic
+  pull_error  -- advertises diagnosticProvider like `pull`, but answers
+                 textDocument/diagnostic with a JSON-RPC *error* object
+                 instead of a result -- the server is alive and answered,
+                 it rejected the request. Distinct from `wedged`/no answer:
+                 a caller must not treat this the same as a clean file.
+  init_error  -- answers `initialize` itself with a JSON-RPC error object
+                 (e.g. rejected params) rather than a result. The server is
+                 alive throughout and answers shutdown/exit normally
+                 afterwards -- distinct from `crash` (process death) and
+                 `deaf`/`wedged` (no answer at all).
+  noisy       -- emits unsolicited notifications before each reply
+  slow        -- answers initialize (and shutdown) immediately, but delays
+                 SLOW_DELAY seconds before answering any other request --
+                 a real server that is merely slow, not dead
 
 Optional third argv overrides SLOW_DELAY for "slow" mode (default 0.8s if
 omitted, so every existing caller is unaffected). Added for pool.py's
@@ -74,7 +84,7 @@ def _capabilities():
         "hoverProvider": True,
         "workspaceSymbolProvider": True,
     }
-    if MODE == "pull":
+    if MODE in ("pull", "pull_error"):
         caps["diagnosticProvider"] = {"interFileDependencies": False, "workspaceDiagnostics": False}
     return caps
 
@@ -98,6 +108,11 @@ def main():
                     "params": {"type": 3, "message": "chatter"}})
 
         if method == "initialize":
+            if MODE == "init_error":
+                _write({"jsonrpc": "2.0", "id": mid, "error": {
+                    "code": -32602, "message": "Invalid params: unsupported rootUri",
+                }})
+                continue
             _write({"jsonrpc": "2.0", "id": mid,
                     "result": {"capabilities": _capabilities()}})
             continue
@@ -126,6 +141,11 @@ def main():
             time.sleep(SLOW_DELAY)
 
         if method == "textDocument/diagnostic":
+            if MODE == "pull_error":
+                _write({"jsonrpc": "2.0", "id": mid, "error": {
+                    "code": -32001, "message": "diagnostics unavailable: project not yet indexed",
+                }})
+                continue
             _write({"jsonrpc": "2.0", "id": mid, "result": {"kind": "full", "items": [{
                 "range": {"start": {"line": 4, "character": 0}, "end": {"line": 4, "character": 3}},
                 "severity": 2, "message": "'x' is declared but never used.",

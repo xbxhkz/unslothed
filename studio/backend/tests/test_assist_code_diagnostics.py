@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from core.inference.assist_code import diagnostics, session as sess
+from core.inference.assist_code import diagnostics, jsonrpc, session as sess
 
 FAKE = os.path.join(os.path.dirname(__file__), "lsp_fake_server.py")
 
@@ -55,6 +55,23 @@ class TestPullPath:
             assert got[0]["severity"] == "warning"
             assert "never used" in got[0]["message"]
             assert got[0]["line"] == 5
+            assert got[0]["column"] == 1     # LSP character 0
+        finally:
+            s.close()
+
+
+class TestPullError:
+    def test_a_genuine_protocol_error_on_the_pull_path_is_not_swallowed_as_clean(
+        self, tmp_path, ts_file
+    ):
+        """A server that answers textDocument/diagnostic with a JSON-RPC
+        error object is alive and rejected the request -- that is not the
+        same situation as "nothing to report," and must not come back
+        looking like a clean file. See diagnostics.py's module docstring."""
+        s = _started(tmp_path, "pull_error")
+        try:
+            with pytest.raises(jsonrpc.LspError):
+                diagnostics.collect(s, str(ts_file), timeout = 10)
         finally:
             s.close()
 
