@@ -252,3 +252,148 @@ class TestInFlightProtection:
         assert not t.is_alive(), "worker thread never finished"
         assert "error" not in result, f"in-flight request was killed: {result.get('error')!r}"
         assert "value" in result, "in-flight request never completed"
+
+
+class TestAtomicReacquireClaim:
+    """Fix round 2: the existing-healthy-session path of _acquire_core used
+    to check is_healthy() OUTSIDE _lock, then re-acquire _lock separately
+    to increment in_flight -- a two-phase "observe, then claim" shape, the
+    exact thing round 1's own docstring warned the new-session path
+    against, just still present in the one path that split into two lock
+    sections. A concurrent eviction (for a DIFFERENT key) could land in the
+    gap between the health check and the claim, evict and close THIS
+    session while its in_flight still read 0, and lease() would then
+    increment in_flight on an already-closed session, believing it
+    protected.
+
+    Uses a deterministic pause inside is_healthy() rather than natural
+    concurrency -- the real window is a few bytecode instructions wide, so
+    a natural-timing test would pass against broken code almost always,
+    which is worse than no test.
+    """
+
+    def test_reacquiring_an_idle_session_is_atomic_with_its_health_check(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(pool, "MAX_SESSIONS", 1)
+        one = tmp_path / "one"; one.mkdir()
+        two = tmp_path / "two"; two.mkdir()
+
+        a = pool.acquire("typescript", str(one), _factory(tmp_path))
+        real_is_healthy = a.is_healthy
+        paused = threading.Event()
+        release_gate = threading.Event()
+
+        def paused_is_healthy():
+            # Compute the real, honest answer FIRST (matching the actual
+            # bug: the check itself is accurate at the instant it runs),
+            # then stall before returning it -- this is the gap a
+            # concurrent eviction for a different key can land in against
+            # the unfixed two-phase code, and cannot land in at all
+            # against the fix, because the fix holds _lock across this
+            # entire call.
+            result = real_is_healthy()
+            paused.set()
+            release_gate.wait(timeout = 5)
+            return result
+
+        monkeypatch.setattr(a, "is_healthy", paused_is_healthy)
+
+        leased = {}
+        entered = threading.Event()
+        hold_lease = threading.Event()
+
+        def lease_worker():
+            # Keeps the lease open (in_flight == 1) past the point where
+            # the race is decided, so round 1's own reclaim-on-release
+            # doesn't retire it before this test gets to assert on it --
+            # releasing immediately would let a SUBSEQUENT, entirely
+            # correct eviction of the now-genuinely-idle session look
+            # identical to the bug this test exists to catch.
+            with pool.lease("typescript", str(one), _factory(tmp_path)) as s:
+                leased["session"] = s
+                entered.set()
+                hold_lease.wait(timeout = 5)
+
+        t1 = threading.Thread(target = lease_worker)
+        t1.start()
+        assert paused.wait(timeout = 5), "the health check's pause point was never reached"
+
+        # A competing acquire for a DIFFERENT key, started while t1 is
+        # paused right after computing a genuinely healthy result but
+        # before that result -- and the in_flight claim -- is committed.
+        # Against the unfixed code this races freely: 'one' still reads
+        # in_flight == 0, so at MAX_SESSIONS=1 it is the only eviction
+        # candidate and gets evicted+closed. Against the fix, this blocks
+        # on the same _lock t1 holds for the whole atomic section and
+        # cannot even begin its eviction scan until t1 finishes.
+        t2 = threading.Thread(
+            target = lambda: pool.acquire("typescript", str(two), _factory(tmp_path))
+        )
+        t2.start()
+        # Give the race a real chance: against broken code t2 finishes
+        # almost immediately; against fixed code it is genuinely still
+        # blocked on the lock, and this just bounds how long we wait
+        # before continuing.
+        t2.join(timeout = 1.0)
+
+        release_gate.set()
+        assert entered.wait(timeout = 5), "lease() never handed back a session"
+
+        assert leased.get("session") is a, "lease() must hand back the same session it looked up"
+        assert a.is_healthy(), "the session handed back must not have been evicted mid-claim"
+
+        hold_lease.set()
+        t1.join(timeout = 5)
+        t2.join(timeout = 5)
+        assert not t1.is_alive() and not t2.is_alive(), "a worker thread never finished"
+
+
+class TestReclaimOnRelease:
+    """Fix round 2: the pool didn't re-trim when a lease released -- it
+    stayed over cap until the next brand-new-key acquisition happened to
+    trigger _evict_locked, or until the idle reaper's much longer
+    IDLE_TIMEOUT_SECONDS window elapsed. Language servers are 200MB-1GB
+    each, so an over-cap pool held idle is real memory, not just a
+    bookkeeping nicety. Mirrors mcp_client._release_stdio_session, which
+    the original brief for round 1's fix omitted.
+    """
+
+    def test_releasing_a_lease_reclaims_the_pool_without_a_new_acquire(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(pool, "MAX_SESSIONS", 1)
+        one = tmp_path / "one"; one.mkdir()
+        two = tmp_path / "two"; two.mkdir()
+
+        with pool.lease("typescript", str(one), _factory(tmp_path)):
+            pool.acquire("typescript", str(two), _factory(tmp_path))
+            assert pool.stats()["live"] == 2, "the pool must overshoot while 'one' is in flight"
+        # No further acquire() call here -- release alone must reclaim.
+        assert pool.stats()["live"] == 1, "release must reclaim without waiting for a new acquire"
+
+    def test_release_reclaim_never_evicts_the_session_it_just_released(self, tmp_path, monkeypatch):
+        """Without excluding the just-released key from its own reclaim
+        scan, a session could evict itself the instant its own lease ends
+        (its in_flight reads 0 at exactly that moment) whenever it's the
+        only other idle-looking candidate -- the release-side analogue of
+        the insert-time "acquire evicts itself" bug this round's
+        evict-before-publish fix already closed on the acquire side.
+        """
+        monkeypatch.setattr(pool, "MAX_SESSIONS", 1)
+        one = tmp_path / "one"; one.mkdir()
+        two = tmp_path / "two"; two.mkdir()
+
+        cm_one = pool.lease("typescript", str(one), _factory(tmp_path))
+        a = cm_one.__enter__()
+        cm_two = pool.lease("typescript", str(two), _factory(tmp_path))
+        b = cm_two.__enter__()
+        assert pool.stats()["live"] == 2, "the pool must overshoot while both are in flight"
+
+        # Release 'one' while 'two' is STILL leased (busy). 'one' reads
+        # in_flight == 0 at this exact instant and is the only other
+        # session -- without the self-exclusion it would look like the
+        # only "idle" candidate and evict itself.
+        cm_one.__exit__(None, None, None)
+        assert pool.stats()["live"] == 2, "a session must not evict itself on its own release"
+        assert a.is_healthy()
+        assert b.is_healthy()
+
+        cm_two.__exit__(None, None, None)
+        assert pool.stats()["live"] == 1, "once 'two' also releases, the pool must reclaim down to cap"

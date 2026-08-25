@@ -107,28 +107,42 @@ def _acquire_core(key, root, factory, start_timeout, *, mark_in_flight):
     """Shared machinery for ``acquire()`` and ``lease()``.
 
     The ``mark_in_flight`` increment happens inside the same ``_lock``
-    section that publishes the session to ``_sessions`` -- deliberately
-    NOT after a plain ``acquire()`` call returns. If ``lease()`` instead
-    called ``acquire()`` and incremented afterward, the gap between those
-    two steps would reopen exactly the race this exists to close: a
-    concurrent eviction on another thread would still see ``in_flight == 0``
-    during that gap and could pick this session as its victim before the
-    increment ever lands.
+    section that publishes/re-validates the session -- for BOTH the
+    new-session path below and the existing-session path just above it.
+
+    Fix round 2: the existing-session path used to fetch ``existing``,
+    release ``_lock``, call ``existing.is_healthy()`` OUTSIDE the lock, and
+    only THEN re-acquire ``_lock`` to claim it -- the exact two-phase
+    "observe, then claim" shape this docstring already warned the
+    new-session path against, just in the one place that still had it.
+    Reproduced deterministically under review: pausing inside
+    ``is_healthy()`` right after it computes a genuinely healthy result
+    but before returning, a concurrent eviction for a DIFFERENT key could
+    land in that gap -- ``in_flight`` for this key was still 0, so nothing
+    protected it -- evict and close THIS session, and this function would
+    then increment ``in_flight`` and hand back an already-closed session,
+    believing it protected. ``is_healthy()`` is just a ``poll()`` plus a
+    flag read (no I/O), so folding it into the same locked section that
+    was already doing the claim is cheap and closes the gap completely: a
+    concurrent eviction on another thread now either fully precedes this
+    whole observe-and-claim (sees the session, in_flight still 0, evicts
+    it -- correctly, nobody had claimed it yet) or fully follows it (sees
+    in_flight == 1, correctly skips it). It can no longer land in between.
     """
     with _key_lock(key):
+        stale = None
         with _lock:
             existing = _sessions.get(key)
-        if existing is not None:
-            if existing.is_healthy():
-                with _lock:
+            if existing is not None:
+                if existing.is_healthy():
                     _last_used[key] = time.monotonic()
                     if mark_in_flight:
                         _in_flight[key] = _in_flight.get(key, 0) + 1
-                return existing
-            with _lock:
-                _sessions.pop(key, None)
+                    return existing
+                stale = _sessions.pop(key, None)
                 _last_used.pop(key, None)
-            _close_quietly(existing)
+        if stale is not None:
+            _close_quietly(stale)
 
         session = factory(os.path.abspath(root))
         session.start(timeout = start_timeout)   # SessionStartFailed propagates
@@ -201,18 +215,51 @@ def lease(language, root, factory, *, start_timeout = 60.0):
     across a session replacement racing a still-open lease on the old one),
     which just means the pool stays oversized a little longer -- the
     explicitly preferred failure direction, not a dangerous one.
+
+    Also re-enforces MAX_SESSIONS on release, synchronously, in this same
+    ``finally`` -- not deferred to a background thread or to whenever the
+    next brand-new key happens to be acquired. ``_evict_locked`` only trims
+    idle sessions at insert time, so the pool can be left transiently over
+    cap while every cached session was busy (its own docstring); without
+    reclaiming here, that overshoot would otherwise persist indefinitely if
+    no new key is ever acquired afterward, or sit until the idle reaper's
+    much longer ``IDLE_TIMEOUT_SECONDS`` window elapses. Language servers
+    are 200MB-1GB each, so an over-cap pool held idle is real memory, not
+    just a bookkeeping nicety. Mirrors ``mcp_client._release_stdio_session``
+    (:701), which the original brief for round 1's fix omitted -- this
+    round's gap, not a prior-round oversight.
     """
     key = _key(language, root)
     session = _acquire_core(key, root, factory, start_timeout, mark_in_flight = True)
     try:
         yield session
     finally:
+        victims = []
         with _lock:
             remaining = _in_flight.get(key, 0) - 1
             if remaining <= 0:
                 _in_flight.pop(key, None)
             else:
                 _in_flight[key] = remaining
+            _last_used[key] = time.monotonic()
+            # Never pick the key we just released as its own reclaim victim
+            # (mcp_client's "never evict the session we just used" -- its
+            # last_used is freshest, so this is defensive, not load-bearing
+            # in the common case, but the new-session path already showed
+            # a just-touched entry CAN end up as the only idle candidate).
+            while len(_sessions) > MAX_SESSIONS:
+                idle = [k for k in _sessions if k != key and _in_flight.get(k, 0) == 0]
+                if not idle:
+                    break
+                victim_key = min(idle, key = lambda k: _last_used.get(k, 0))
+                victims.append((victim_key, _sessions.pop(victim_key)))
+                _last_used.pop(victim_key, None)
+        for victim_key, victim in victims:
+            try:
+                logger.info("assist_code: evicting idle language server for %s", victim_key)
+            except Exception:
+                pass
+            _close_quietly(victim)
 
 
 def reap_idle():
