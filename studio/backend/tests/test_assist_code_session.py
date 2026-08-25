@@ -67,6 +67,26 @@ class TestHandshake:
         finally:
             s.close()
 
+    def test_a_broken_transport_close_does_not_mask_the_original_start_failure(self, tmp_path, monkeypatch):
+        # Regression (Task 3 re-review, fault injection): _teardown_after_
+        # failed_start's transport-close had no try/except of its own. A
+        # Transport.close() that raises must not turn a handshake-timeout
+        # SessionStartFailed into an unrelated RuntimeError from teardown --
+        # that's the original error getting masked, not just an untidy exit.
+        monkeypatch.setattr(
+            jsonrpc.Transport, "close",
+            lambda self: (_ for _ in ()).throw(RuntimeError("close() is broken"))
+        )
+        s = _session(tmp_path, "deaf")
+        with pytest.raises(sess.SessionStartFailed) as e:
+            s.start(timeout = 1)
+        assert "did not" in str(e.value).lower() or "timed out" in str(e.value).lower()
+        # The fallback in _teardown_after_failed_start must still reap the
+        # process even though the transport's own close() never got the
+        # chance to: it raised before doing anything.
+        assert s._proc is not None
+        assert s._proc.poll() is not None
+
     def test_start_reaps_the_subprocess_when_the_handshake_fails(self, tmp_path):
         # Regression: start() used to raise SessionStartFailed after already
         # spawning a real transport/process, but left the process running.

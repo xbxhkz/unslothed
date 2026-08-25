@@ -143,11 +143,38 @@ class Session:
         each retry would leak another process. ``self._proc`` is kept set
         (not reset to ``None``) so a caller inspecting the session after
         failure can still see that a process existed and was reaped.
+
+        ``self._transport`` is always set by the time any of the three call
+        sites in ``start()`` can reach here (it's constructed right after
+        ``Popen`` succeeds, before the handshake that can fail), so there is
+        no "spawned but no transport yet" case to fall back from -- the old
+        ``elif self._proc is not None`` branch below could never run.
+
+        The transport-close is wrapped in its own ``try/except`` rather than
+        relying on ``Transport.close()`` to swallow everything itself: Task
+        3's re-review found that a monkeypatched ``Transport.close()`` that
+        raises turned a handshake-timeout ``SessionStartFailed`` into an
+        unrelated ``RuntimeError`` from teardown, masking the real error.
+        That the real implementation happens to swallow its own exceptions
+        today is borrowed safety from another module, not a guarantee this
+        function can rely on.
+
+        The process-level fallback below now runs unconditionally (not
+        ``elif``) after the transport-close attempt: in the ordinary case
+        ``Transport.close()`` already terminated the process itself, so this
+        is a no-op against an already-dead one. It only does real work when
+        ``Transport.close()`` is the thing that's broken -- without it, a
+        caller whose transport-close is misbehaving would still strand the
+        very process this function exists to reap.
         """
         if self._transport is not None:
-            self._transport.close()
-            self._transport = None
-        elif self._proc is not None:
+            try:
+                self._transport.close()
+            except Exception:
+                pass
+            finally:
+                self._transport = None
+        if self._proc is not None and self._proc.poll() is None:
             try:
                 self._proc.terminate()
                 self._proc.wait(timeout = 3)
