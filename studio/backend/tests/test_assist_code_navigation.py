@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from core.inference.assist_code import navigation as nav, session as sess
+from core.inference.assist_code import jsonrpc, navigation as nav, session as sess
 
 FAKE = os.path.join(os.path.dirname(__file__), "lsp_fake_server.py")
 
@@ -69,3 +69,20 @@ class TestOperations:
 
     def test_no_symbol_matches_is_an_empty_list_not_an_error(self, started, ts_file):
         assert nav.symbols(started, "nothingmatches", timeout = 10) == []
+
+
+class TestReferencesError:
+    def test_a_genuine_protocol_error_is_not_swallowed_as_no_references(self, tmp_path, ts_file):
+        """A server that answers textDocument/references with a JSON-RPC
+        error object is alive and rejected the request -- that is not the
+        same situation as "nothing calls this." An empty list here is
+        action-guiding (it reads as "safe to delete"), so a real failure
+        must never be allowed to look like a clean answer. See
+        navigation.py's module docstring."""
+        s = sess.Session([sys.executable, FAKE, "refs_error"], str(tmp_path), language = "typescript")
+        s.start(timeout = 10)
+        try:
+            with pytest.raises(jsonrpc.LspError):
+                nav.references(s, str(ts_file), {"line": 0, "character": 6}, timeout = 10)
+        finally:
+            s.close()
