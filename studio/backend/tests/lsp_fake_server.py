@@ -18,13 +18,30 @@ Modes:
   slow     -- answers initialize (and shutdown) immediately, but delays
               SLOW_DELAY seconds before answering any other request --
               a real server that is merely slow, not dead
+
+Optional third argv overrides SLOW_DELAY for "slow" mode (default 0.8s if
+omitted, so every existing caller is unaffected). Added for pool.py's
+in-flight-eviction regression test, which needs the per-request delay to
+exceed jsonrpc.Transport.close()'s hardcoded 2.0s graceful-shutdown timeout
+(jsonrpc.py:245): at the default 0.8s, a close() racing an in-flight "slow"
+request always loses gracefully -- the fake server processes messages
+strictly FIFO in one thread, so it finishes writing the pending request's
+real reply (queued ahead of the shutdown message close() sends) before ever
+reading shutdown, regardless of whether eviction was supposed to protect
+the session. That made an earlier version of the regression test's own
+negative control inert: reverting the in-flight guard didn't make it fail,
+because the close() race couldn't corrupt the pending request either way.
+A delay past 2.0s forces close()'s own shutdown wait to time out and fall
+through to an abrupt process kill while the request is still genuinely
+unanswered, which is what actually distinguishes protected from
+unprotected.
 """
 import json
 import sys
 import time
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else "normal"
-SLOW_DELAY = 0.8  # seconds; long enough for a short client-side timeout to fire first
+SLOW_DELAY = float(sys.argv[2]) if len(sys.argv) > 2 else 0.8  # seconds
 
 
 def _read():
