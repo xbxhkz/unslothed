@@ -67,6 +67,22 @@ class TestHandshake:
         finally:
             s.close()
 
+    def test_start_reaps_the_subprocess_when_the_handshake_fails(self, tmp_path):
+        # Regression: start() used to raise SessionStartFailed after already
+        # spawning a real transport/process, but left the process running.
+        # Every other test in this file closes in a `finally`, which makes
+        # start()'s own cleanup (or lack of it) invisible -- this test
+        # deliberately does NOT call close(), because the failure this
+        # guards against is a caller (Task 4's pool `acquire()`) letting
+        # SessionStartFailed propagate without ever calling close(). If
+        # start() doesn't reap the process itself, this test both fails its
+        # assertion AND leaks the subprocess.
+        s = _session(tmp_path, "deaf")
+        with pytest.raises(sess.SessionStartFailed):
+            s.start(timeout = 1)
+        assert s._proc is not None
+        assert s._proc.poll() is not None
+
 
 class TestDocuments:
     def test_open_document_sends_the_file_contents(self, tmp_path):
@@ -94,6 +110,42 @@ class TestDocuments:
         finally:
             s.close()
 
+    def test_open_document_raises_documentreaderror_not_sessionstartfailed(self, tmp_path):
+        # Regression: a missing/unreadable file must not look like a startup
+        # failure. Session.request() already keeps post-start failures
+        # distinct from SessionStartFailed for the same reason -- a caller
+        # doing `except SessionStartFailed: restart_the_session()` would
+        # otherwise tear down a perfectly healthy server over one bad file.
+        missing = tmp_path / "does_not_exist.ts"
+        s = _session(tmp_path)
+        try:
+            s.start(timeout = 10)
+            with pytest.raises(sess.DocumentReadError):
+                s.open_document(str(missing))
+        finally:
+            s.close()
+
+    def test_open_document_rejects_a_file_over_the_size_cap(self, tmp_path):
+        big = tmp_path / "big.ts"
+        big.write_bytes(b"x" * (sess._MAX_DOCUMENT_BYTES + 1))
+        s = _session(tmp_path)
+        try:
+            s.start(timeout = 10)
+            with pytest.raises(sess.DocumentReadError):
+                s.open_document(str(big))
+            assert s.opened_count == 0
+        finally:
+            s.close()
+
+    def test_wait_notification_raises_when_the_session_was_never_started(self, tmp_path):
+        # Consistency: request() already raises LspClosed for this exact
+        # condition. wait_notification() silently returning None instead
+        # made the same "never started" state look like "no matching
+        # notification yet" to a caller.
+        s = _session(tmp_path)
+        with pytest.raises(jsonrpc.LspClosed):
+            s.wait_notification("textDocument/publishDiagnostics", lambda p: True, timeout = 0.1)
+
 
 class TestHealth:
     def test_a_live_session_is_healthy(self, tmp_path):
@@ -118,3 +170,14 @@ class TestHealth:
         uri = sess.path_to_uri(str(f))
         assert uri.startswith("file:///")
         assert sess.uri_to_path(uri) == os.path.abspath(str(f))
+
+    def test_uri_to_path_resolves_the_unc_authority_not_the_current_drive(self):
+        # Regression: urlparse puts a UNC host in `netloc`, not `path`.
+        # Reading only `.path` silently dropped the host and substituted the
+        # current drive, returning a plausible-looking but wrong local path
+        # (e.g. "C:\\share\\dir\\file.ts") instead of raising or resolving
+        # correctly.
+        uri = "file://SERVER/share/dir/file.ts"
+        path = sess.uri_to_path(uri)
+        assert path == r"\\SERVER\share\dir\file.ts"
+        assert sess.path_to_uri(path) == uri

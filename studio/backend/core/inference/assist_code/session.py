@@ -23,9 +23,26 @@ _LANGUAGE_IDS = {
     "csharp": "csharp",
 }
 
+# 5 MB: generous for hand-written source, small enough to keep a minified
+# bundle or other generated file out of a single JSON-RPC payload.
+_MAX_DOCUMENT_BYTES = 5 * 1024 * 1024
+
 
 class SessionStartFailed(Exception):
     """The server could not be spawned or did not complete the handshake."""
+
+
+class DocumentReadError(Exception):
+    """A file could not be read for ``open_document``.
+
+    Deliberately NOT a ``SessionStartFailed``: the session may be perfectly
+    healthy when this happens (a file vanished, a directory was passed by
+    mistake, a file is too large). ``Session.request`` already keeps
+    post-start failures (``LspTimeout``/``LspClosed``) distinct from startup
+    failures for the same reason -- a caller that reacts to
+    ``SessionStartFailed`` by restarting the session should never do so over
+    a single bad file.
+    """
 
 
 def path_to_uri(path):
@@ -40,7 +57,14 @@ def path_to_uri(path):
 
 def uri_to_path(uri):
     parsed = urllib.parse.urlparse(uri)
-    return os.path.abspath(urllib.request.url2pathname(parsed.path))
+    # A UNC/network URI (file://SERVER/share/...) puts the host in `netloc`,
+    # not `path`. Reading only `parsed.path` silently drops it and returns a
+    # plausible-looking but wrong local path (the current drive substituted
+    # for the network host) instead of raising -- worse than an error, since
+    # a caller has no signal anything went wrong. Folding netloc back in
+    # front of path before url2pathname reconstructs the UNC form correctly.
+    path = f"//{parsed.netloc}{parsed.path}" if parsed.netloc else parsed.path
+    return os.path.abspath(urllib.request.url2pathname(path))
 
 
 class Session:
@@ -92,11 +116,13 @@ class Session:
         try:
             result = self._transport.request("initialize", params, timeout = timeout)
         except jsonrpc.LspTimeout as e:
+            self._teardown_after_failed_start()
             raise SessionStartFailed(
                 f"the {self.language} language server did not complete its handshake "
                 f"within {timeout:.0f}s"
             ) from e
         except jsonrpc.LspClosed as e:
+            self._teardown_after_failed_start()
             raise SessionStartFailed(
                 f"the {self.language} language server exited during startup: {e}"
             ) from e
@@ -104,7 +130,32 @@ class Session:
         try:
             self._transport.notify("initialized", {})
         except jsonrpc.LspClosed as e:
+            self._teardown_after_failed_start()
             raise SessionStartFailed(f"server closed right after initialize: {e}") from e
+
+    def _teardown_after_failed_start(self):
+        """Reap the subprocess when ``start()`` fails after spawning it.
+
+        Without this, a caller that lets ``SessionStartFailed`` propagate --
+        Task 4's pool ``acquire()`` does exactly this -- strands a live
+        language-server process. That's the worst time for it: cold-start
+        failures are precisely when acquisition is retried repeatedly, so
+        each retry would leak another process. ``self._proc`` is kept set
+        (not reset to ``None``) so a caller inspecting the session after
+        failure can still see that a process existed and was reaped.
+        """
+        if self._transport is not None:
+            self._transport.close()
+            self._transport = None
+        elif self._proc is not None:
+            try:
+                self._proc.terminate()
+                self._proc.wait(timeout = 3)
+            except Exception:
+                try:
+                    self._proc.kill()
+                except Exception:
+                    pass
 
     def supports(self, name):
         return bool(self.capabilities.get(name))
@@ -115,10 +166,20 @@ class Session:
         if path in self._opened:
             return
         try:
+            size = os.path.getsize(path)
+        except OSError as e:
+            raise DocumentReadError(f"could not read {path}: {e}") from e
+        if size > _MAX_DOCUMENT_BYTES:
+            raise DocumentReadError(
+                f"{path} is {size} bytes, over the {_MAX_DOCUMENT_BYTES}-byte "
+                f"limit for opening a document (minified bundles and generated "
+                f"files should not be sent to the language server whole)"
+            )
+        try:
             with open(path, "r", encoding = "utf-8", errors = "replace") as fh:
                 text = fh.read()
         except OSError as e:
-            raise SessionStartFailed(f"could not read {path}: {e}") from e
+            raise DocumentReadError(f"could not read {path}: {e}") from e
         ext = os.path.splitext(path)[1].lower()
         language_id = _LANGUAGE_IDS.get(self.language, self.language)
         if ext in (".js", ".jsx", ".mjs", ".cjs"):
@@ -139,7 +200,7 @@ class Session:
 
     def wait_notification(self, method, predicate, timeout = 10.0):
         if self._transport is None:
-            return None
+            raise jsonrpc.LspClosed("session was never started")
         return self._transport.wait_notification(method, predicate, timeout = timeout)
 
     def is_healthy(self):
