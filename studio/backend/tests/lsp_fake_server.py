@@ -19,6 +19,11 @@ Modes:
                  instead of a result -- the server is alive and answered,
                  it rejected the request. Distinct from `wedged`/no answer:
                  a caller must not treat this the same as a clean file.
+  refs_error  -- like `normal`, but answers textDocument/references with a
+                 JSON-RPC *error* object instead of a result. Same shape as
+                 `pull_error`, for navigation.references()'s negative
+                 control: a caller must not fold this into an empty
+                 "no references" result -- that reads as "safe to delete."
   init_error  -- answers `initialize` itself with a JSON-RPC error object
                  (e.g. rejected params) rather than a result. The server is
                  alive throughout and answers shutdown/exit normally
@@ -150,6 +155,43 @@ def main():
                 "range": {"start": {"line": 4, "character": 0}, "end": {"line": 4, "character": 3}},
                 "severity": 2, "message": "'x' is declared but never used.",
             }]}})
+            continue
+        if method == "textDocument/definition":
+            _write({"jsonrpc": "2.0", "id": mid, "result": [{
+                "uri": msg["params"]["textDocument"]["uri"],
+                "range": {"start": {"line": 0, "character": 6},
+                          "end": {"line": 0, "character": 7}},
+            }]})
+            continue
+        if method == "textDocument/references":
+            uri = msg["params"]["textDocument"]["uri"]
+            if MODE == "refs_error":
+                _write({"jsonrpc": "2.0", "id": mid, "error": {
+                    "code": -32001, "message": "references unavailable: project not yet indexed",
+                }})
+                continue
+            _write({"jsonrpc": "2.0", "id": mid, "result": [
+                {"uri": uri, "range": {"start": {"line": 0, "character": 6},
+                                       "end": {"line": 0, "character": 7}}},
+                {"uri": uri, "range": {"start": {"line": 3, "character": 2},
+                                       "end": {"line": 3, "character": 3}}},
+            ]})
+            continue
+        if method == "textDocument/hover":
+            _write({"jsonrpc": "2.0", "id": mid, "result": {
+                "contents": {"kind": "markdown", "value": "```ts\nconst a: number\n```"}}})
+            continue
+        if method == "workspace/symbol":
+            query = (msg.get("params") or {}).get("query", "")
+            if query == "nothingmatches":
+                _write({"jsonrpc": "2.0", "id": mid, "result": []})
+                continue
+            _write({"jsonrpc": "2.0", "id": mid, "result": [{
+                "name": query or "a", "kind": 13,
+                "location": {"uri": "file:///%s/a.ts" % "ws",
+                             "range": {"start": {"line": 0, "character": 6},
+                                       "end": {"line": 0, "character": 7}}},
+            }]})
             continue
         _write({"jsonrpc": "2.0", "id": mid, "result": None})
 
