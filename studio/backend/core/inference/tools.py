@@ -9802,6 +9802,7 @@ SEARCH_CONVERSATION_TOOL = {
 }
 
 from core.inference.assist_vision import ASSIST_VISION_TOOLS, ASSIST_VISION_TOOL_NAMES
+from core.inference.assist_code import ASSIST_CODE_TOOLS, ASSIST_CODE_TOOL_NAMES
 
 ALL_TOOLS = [
     WEB_SEARCH_TOOL,
@@ -9812,6 +9813,7 @@ ALL_TOOLS = [
     SEARCH_KNOWLEDGE_BASE_TOOL,
     SEARCH_CONVERSATION_TOOL,
     *ASSIST_VISION_TOOLS,
+    *ASSIST_CODE_TOOLS,
 ]
 
 
@@ -10033,6 +10035,12 @@ def execute_tool(
     if name in ASSIST_VISION_TOOL_NAMES:
         from core.inference import assist_vision
         return assist_vision.execute(
+            name, arguments, session_id = session_id,
+            timeout = effective_timeout, cancel_event = cancel_event,
+        )
+    if name in ASSIST_CODE_TOOL_NAMES:
+        from core.inference import assist_code
+        return assist_code.execute(
             name, arguments, session_id = session_id,
             timeout = effective_timeout, cancel_event = cancel_event,
         )

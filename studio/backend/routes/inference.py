@@ -3657,12 +3657,17 @@ async def _select_request_tools(
     # the filter admits it, and the vision schemas ride along. Note the search_conversation
     # precedent below is gated on a condition too, and justified as read-only and
     # always-safe -- which these are not: one drives a webcam, one makes deepfakes.
+    #
+    # Sub-project 2 adds the code-intelligence tools to the same re-add rather
+    # than a second hunk: one place to reason about, one merge conflict to
+    # resolve instead of two.
     if tools_on and tools:
-        from core.inference.tools import ASSIST_VISION_TOOL_NAMES
+        from core.inference.tools import ASSIST_VISION_TOOL_NAMES, ASSIST_CODE_TOOL_NAMES
+        _addable = ASSIST_VISION_TOOL_NAMES | ASSIST_CODE_TOOL_NAMES
         _already = {t["function"]["name"] for t in tools}
         tools = tools + [
             t for t in ALL_TOOLS
-            if t["function"]["name"] in ASSIST_VISION_TOOL_NAMES
+            if t["function"]["name"] in _addable
             and t["function"]["name"] not in _already
         ]
     # Drop the RAG tool without a scope: nothing to search over.
