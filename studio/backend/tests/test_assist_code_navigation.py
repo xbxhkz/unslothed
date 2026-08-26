@@ -203,13 +203,20 @@ class TestHoverContentShapes:
 
 
 class TestFenceStripping:
-    """Table from Task 7's round-2 review, confirmed against _strip_fences
-    directly. A closing fence never legitimately carries a language tag
-    (CommonMark: the info string belongs to the opening delimiter only),
-    so anything glued onto one -- malformed input, but real -- is content
-    to keep, not a tag to discard."""
+    """Table from Task 7's round-2 and round-3 review, confirmed against
+    _strip_fences directly. A closing fence never legitimately carries a
+    language tag (CommonMark: the info string belongs to the opening
+    delimiter only), so anything glued onto one -- malformed input, but
+    real -- is content to keep, not a tag to discard. That rule is a
+    per-delimiter TOGGLE (odd occurrence opens, even occurrence closes),
+    not "only the very first fence line in the whole text is ever an
+    opener" -- round 2's implementation was the latter, a narrower special
+    case that happened to satisfy one fence pair but leaked a second
+    block's own tag into the output as content (see round-2 rows below
+    plus the round-3 multi-block rows)."""
 
     @pytest.mark.parametrize("raw, expected", [
+        # --- round-2 table: must not regress ---
         ("```ts\nconst a: number\n```", "const a: number"),
         ("```\nplain\n```", "plain"),
         ("```py\nx = 1\n```trailing", "x = 1\ntrailing"),
@@ -218,6 +225,20 @@ class TestFenceStripping:
         ("no fences at all, just text", "no fences at all, just text"),
         ("```c++\nsome code\n```", "some code"),
         ("```objective-c\nsome code\n```", "some code"),
+        # --- round-3: a second, tagged block's tag must not leak ---
+        ("```py\ncode1\n```\nsome text\n```js\ncode2\n```", "code1\nsome text\ncode2"),
+        # --- round-3: a tagged block followed by an untagged one ---
+        ("```py\ncode1\n```\nmiddle\n```\ncode2\n```", "code1\nmiddle\ncode2"),
+        # --- round-3: fences indented 1, 2, and 3 spaces (CommonMark-legal) ---
+        (" ```ts\ncode\n```", "code"),
+        ("  ```ts\ncode\n```", "code"),
+        ("   ```ts\ncode\n```", "code"),
+        # --- round-3: 4+ spaces is an indented code block, not a fence --
+        # left untouched, not treated as a delimiter at all
+        ("before\n    ```ts\nafter", "before\n    ```ts\nafter"),
+        # --- round-3: tilde fences are an equal alternative to backticks ---
+        ("~~~py\ncode\n~~~", "code"),
+        ("before\n~~~\nblock content\n~~~\nafter", "before\nblock content\nafter"),
     ])
     def test_table(self, raw, expected):
         assert nav._strip_fences(raw).strip() == expected

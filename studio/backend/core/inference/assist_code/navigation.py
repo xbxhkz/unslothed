@@ -153,54 +153,72 @@ def _hover_text(contents):
     return str(contents)
 
 
+_FENCE_LINE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+
+
 def _strip_fences(text):
     """Remove markdown code-fence delimiters from ``text``, line-wise.
 
-    Round-2 review of Task 7 found a real content-loss bug in the prior
-    implementation: an inline regex (```` ```[tag-chars]*\\n? ````) applied
-    to the whole string at once, with no notion of "opening" vs "closing"
-    and no line awareness. Its language-tag character class is greedy and
-    cannot distinguish a real tag from ordinary prose immediately following
-    ANY ``` occurrence -- so a closing fence butted directly against more
-    text with no separating newline (malformed but real, e.g. a hover
-    value ending "```trailing") silently deleted that trailing text along
-    with the fence. Hover's entire output IS text: returning less than the
-    server sent, with no signal anything went missing, is worse than
-    returning nothing.
+    Round-2 review of Task 7 found a real content-loss bug in the original
+    implementation: an inline regex applied to the whole string at once,
+    with no notion of "opening" vs "closing" and no line awareness, that
+    deleted ordinary prose immediately following ANY fence marker. That was
+    fixed by restoring the distinction CommonMark actually makes: an info
+    string (language tag) belongs to an OPENING fence only, never a
+    closing one, so text glued onto a closer is real content and must be
+    kept.
 
-    The fix restores the markdown distinction CommonMark actually makes:
-    an info string (language tag) belongs to an OPENING fence only: a
-    closing fence is never followed by a legitimate tag, so anything glued
-    onto one is real content, not markup, and must be kept. Applied
-    per physical line:
+    Round-3 review found that fix was itself a narrower special case of
+    that rule rather than the general one: it tracked a single
+    "have we seen the first fence line yet" flag, so only the very first
+    fence line in the whole text was ever treated as an opener -- every
+    later fence line, including a second block's own opening tag, was
+    treated as a closer and its tag leaked into the output as content
+    (``'```py\\ncode1\\n```\\nmore\\n```js\\ncode2\\n```'`` produced
+    ``'code1\\nmore\\njs\\ncode2'``, with the second block's "js" tag
+    surviving). Real language servers -- rust-analyzer, gopls,
+    typescript-language-server -- routinely emit hover as a signature
+    block plus a separate, separately-tagged example block, so this is a
+    realistic shape, not a theoretical one.
 
-      * The FIRST line that starts with ``` is treated as an opening fence
-        -- its entire tag/info-string is discarded -- but ONLY if at least
-        one more line follows it. A lone ```-prefixed line with nothing
-        after it (e.g. hover text that is just "```trailing") cannot be
-        confirmed as opening a block with real content inside, so its
-        text is kept rather than gambled away as a tag.
-      * Every OTHER ```-prefixed line (a genuine closing fence, or a
-        first-and-only fence line with nothing following) has only the
-        three backtick characters removed; whatever remains on that line
-        is real content and is kept. An empty remainder (the ordinary
-        case: a closing fence alone on its own line) contributes nothing,
-        rather than leaving a blank line behind.
-      * Every other line is kept verbatim.
+    The general rule: TOGGLE at every fence line, independently per
+    delimiter character (backtick vs tilde -- CommonMark treats ``~~~`` as
+    an equal alternative to backtick fences, and a tilde fence only closes
+    with tildes, a backtick fence only with backticks; tracking each
+    delimiter's open/closed state separately gets this for free, with no
+    extra matching logic). An odd occurrence of a given delimiter is an
+    opening fence -- its whole line, tag included, is discarded. An even
+    occurrence is a closing fence -- only the marker itself is removed,
+    and anything remaining on that line is kept as real content. The one
+    exception: an odd (would-be-opening) occurrence with no line
+    following it at all (e.g. hover text that is just "```trailing")
+    cannot be confirmed as opening a block with real content inside, so
+    its text is kept rather than gambled away as a tag -- this is what
+    keeps the round-2 table's bare-trailing-fence case correct under the
+    general toggle rule.
+
+    A fence delimiter may be indented up to 3 spaces (CommonMark); 4 or
+    more spaces is an indented code block, a different construct entirely,
+    and is deliberately left untouched -- ``_FENCE_LINE`` only matches 0-3
+    leading spaces, so a 4-space-indented line simply never matches and
+    falls through to being kept verbatim, fence characters and all.
     """
     lines = text.split("\n")
     out = []
-    seen_first_fence = False
+    in_fence = {"`": False, "~": False}
     for index, line in enumerate(lines):
-        if line.startswith("```"):
-            if not seen_first_fence and index < len(lines) - 1:
-                seen_first_fence = True
-                continue  # opening fence: whole line (marker + tag) dropped
-            remainder = line[3:]
-            if remainder:
-                out.append(remainder)
+        match = _FENCE_LINE.match(line)
+        if match is None:
+            out.append(line)
             continue
-        out.append(line)
+        marker, rest = match.group(1), match.group(2)
+        delim = marker[0]
+        if not in_fence[delim] and index < len(lines) - 1:
+            in_fence[delim] = True
+            continue  # opening fence: whole line (marker + tag) dropped
+        in_fence[delim] = False
+        if rest:
+            out.append(rest)
     return "\n".join(out)
 
 
