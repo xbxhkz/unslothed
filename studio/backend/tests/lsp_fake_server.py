@@ -24,6 +24,21 @@ Modes:
                  `pull_error`, for navigation.references()'s negative
                  control: a caller must not fold this into an empty
                  "no references" result -- that reads as "safe to delete."
+  def_error   -- like `normal`, but answers textDocument/definition with a
+                 JSON-RPC *error* object instead of a result. Same shape
+                 and purpose as `refs_error`, for navigation.definition()'s
+                 own negative control -- each of the four navigation
+                 functions needs its own error mode so a regression that
+                 widens only *that* function's except clause back to
+                 swallowing LspError is still caught (see Task 7's round-1
+                 review: a single shared negative control only proved one
+                 function out of four).
+  hover_error -- like `normal`, but answers textDocument/hover with a
+                 JSON-RPC *error* object instead of a result. Same purpose
+                 as `def_error`/`refs_error`, for navigation.hover().
+  symbols_error -- like `normal`, but answers workspace/symbol with a
+                 JSON-RPC *error* object instead of a result. Same purpose
+                 as `def_error`/`refs_error`, for navigation.symbols().
   init_error  -- answers `initialize` itself with a JSON-RPC error object
                  (e.g. rejected params) rather than a result. The server is
                  alive throughout and answers shutdown/exit normally
@@ -157,6 +172,11 @@ def main():
             }]}})
             continue
         if method == "textDocument/definition":
+            if MODE == "def_error":
+                _write({"jsonrpc": "2.0", "id": mid, "error": {
+                    "code": -32001, "message": "definition unavailable: project not yet indexed",
+                }})
+                continue
             _write({"jsonrpc": "2.0", "id": mid, "result": [{
                 "uri": msg["params"]["textDocument"]["uri"],
                 "range": {"start": {"line": 0, "character": 6},
@@ -178,10 +198,20 @@ def main():
             ]})
             continue
         if method == "textDocument/hover":
+            if MODE == "hover_error":
+                _write({"jsonrpc": "2.0", "id": mid, "error": {
+                    "code": -32001, "message": "hover unavailable: project not yet indexed",
+                }})
+                continue
             _write({"jsonrpc": "2.0", "id": mid, "result": {
                 "contents": {"kind": "markdown", "value": "```ts\nconst a: number\n```"}}})
             continue
         if method == "workspace/symbol":
+            if MODE == "symbols_error":
+                _write({"jsonrpc": "2.0", "id": mid, "error": {
+                    "code": -32001, "message": "workspace symbol search unavailable: project not yet indexed",
+                }})
+                continue
             query = (msg.get("params") or {}).get("query", "")
             if query == "nothingmatches":
                 _write({"jsonrpc": "2.0", "id": mid, "result": []})
