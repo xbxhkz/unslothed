@@ -153,6 +153,57 @@ def _hover_text(contents):
     return str(contents)
 
 
+def _strip_fences(text):
+    """Remove markdown code-fence delimiters from ``text``, line-wise.
+
+    Round-2 review of Task 7 found a real content-loss bug in the prior
+    implementation: an inline regex (```` ```[tag-chars]*\\n? ````) applied
+    to the whole string at once, with no notion of "opening" vs "closing"
+    and no line awareness. Its language-tag character class is greedy and
+    cannot distinguish a real tag from ordinary prose immediately following
+    ANY ``` occurrence -- so a closing fence butted directly against more
+    text with no separating newline (malformed but real, e.g. a hover
+    value ending "```trailing") silently deleted that trailing text along
+    with the fence. Hover's entire output IS text: returning less than the
+    server sent, with no signal anything went missing, is worse than
+    returning nothing.
+
+    The fix restores the markdown distinction CommonMark actually makes:
+    an info string (language tag) belongs to an OPENING fence only: a
+    closing fence is never followed by a legitimate tag, so anything glued
+    onto one is real content, not markup, and must be kept. Applied
+    per physical line:
+
+      * The FIRST line that starts with ``` is treated as an opening fence
+        -- its entire tag/info-string is discarded -- but ONLY if at least
+        one more line follows it. A lone ```-prefixed line with nothing
+        after it (e.g. hover text that is just "```trailing") cannot be
+        confirmed as opening a block with real content inside, so its
+        text is kept rather than gambled away as a tag.
+      * Every OTHER ```-prefixed line (a genuine closing fence, or a
+        first-and-only fence line with nothing following) has only the
+        three backtick characters removed; whatever remains on that line
+        is real content and is kept. An empty remainder (the ordinary
+        case: a closing fence alone on its own line) contributes nothing,
+        rather than leaving a blank line behind.
+      * Every other line is kept verbatim.
+    """
+    lines = text.split("\n")
+    out = []
+    seen_first_fence = False
+    for index, line in enumerate(lines):
+        if line.startswith("```"):
+            if not seen_first_fence and index < len(lines) - 1:
+                seen_first_fence = True
+                continue  # opening fence: whole line (marker + tag) dropped
+            remainder = line[3:]
+            if remainder:
+                out.append(remainder)
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
 def _hover_from_result(result):
     """Given a raw ``textDocument/hover`` result, return cleaned plain text.
 
@@ -162,8 +213,7 @@ def _hover_from_result(result):
     """
     text = _hover_text((result or {}).get("contents"))
     # Strip markdown fences: the model gets plain text, not rendering markup.
-    cleaned = re.sub(r"```[a-zA-Z0-9_+-]*\n?", "", text).replace("```", "")
-    return cleaned.strip()
+    return _strip_fences(text).strip()
 
 
 def hover(session, file_path, position, *, timeout = 30.0):

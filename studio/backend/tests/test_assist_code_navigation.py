@@ -183,16 +183,13 @@ class TestHoverContentShapes:
         untagged fence block followed by a second, trailing fence
         immediately butted up against text with no separating newline.
 
-        Current (pinned, not asserted-ideal) behaviour: the fence-stripping
-        regex's language-tag group (``[a-zA-Z0-9_+-]*``) is greedy and has
-        no way to distinguish a real language tag from the start of literal
-        content immediately following a fence marker -- so the trailing
-        "```trailing" is consumed whole, silently dropping "trailing" from
-        the output along with the fence. Real MarkupContent from language
-        servers puts fences on their own line, so this is a narrow, known
-        quirk (not in this round's fix list) rather than a live risk --
-        pinned here so a future change to the stripping regex is a
-        deliberate decision, not an unnoticed behaviour change.
+        Round-2 review of Task 7 found that the previous version of this
+        test pinned a real content-loss bug as "current behaviour": the
+        old inline fence-stripping regex deleted "trailing" along with the
+        marker it was glued to, because it had no way to distinguish a
+        real language tag from ordinary prose immediately following any
+        ``` occurrence. The fix (_strip_fences -- see its docstring)
+        preserves that text; this test now asserts preservation, not loss.
         """
         contents = [
             "```py\ndef f():\n    pass\n```",
@@ -200,5 +197,27 @@ class TestHoverContentShapes:
             "```\nplain fenced\n```trailing",
         ]
         cleaned = nav._hover_from_result({"contents": contents})
-        assert cleaned == "def f():\n    pass\nconst a: number\nplain fenced"
+        assert cleaned == "def f():\n    pass\nconst a: number\nplain fenced\ntrailing"
         assert "```" not in cleaned
+        assert "trailing" in cleaned
+
+
+class TestFenceStripping:
+    """Table from Task 7's round-2 review, confirmed against _strip_fences
+    directly. A closing fence never legitimately carries a language tag
+    (CommonMark: the info string belongs to the opening delimiter only),
+    so anything glued onto one -- malformed input, but real -- is content
+    to keep, not a tag to discard."""
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("```ts\nconst a: number\n```", "const a: number"),
+        ("```\nplain\n```", "plain"),
+        ("```py\nx = 1\n```trailing", "x = 1\ntrailing"),
+        ("```trailing", "trailing"),
+        ("```py\nx = 1\n```\ntrailing", "x = 1\ntrailing"),
+        ("no fences at all, just text", "no fences at all, just text"),
+        ("```c++\nsome code\n```", "some code"),
+        ("```objective-c\nsome code\n```", "some code"),
+    ])
+    def test_table(self, raw, expected):
+        assert nav._strip_fences(raw).strip() == expected
