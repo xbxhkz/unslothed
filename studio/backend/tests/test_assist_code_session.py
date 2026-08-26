@@ -214,6 +214,49 @@ class TestHealth:
         assert uri.startswith("file:///")
         assert sess.uri_to_path(uri) == os.path.abspath(str(f))
 
+    def test_uri_to_path_decodes_a_percent_encoded_drive_letter_colon(self):
+        # Regression: found only against a REAL server (typescript-language-
+        # server, via vscode-uri), never by the round-trip test above. That
+        # test builds its URI with THIS module's own path_to_uri, which never
+        # percent-encodes the colon, so both directions always agreed with
+        # themselves -- a tautological self-consistency check that cannot
+        # expose a divergence from a DIFFERENT encoder's convention, which is
+        # the only place this bug lived. These URI literals are hand-written
+        # in the alternate (real-world) convention on purpose, not produced
+        # by path_to_uri, so the test actually exercises the decoder against
+        # externally representative input instead of against itself.
+        #
+        # url2pathname (nturl2path) decides whether a path carries a drive
+        # letter by looking for a LITERAL ':' in the still percent-encoded
+        # string -- a colon that only exists as '%3A' is invisible to that
+        # check, so the whole path fell through its "no drive" branch and the
+        # drive letter survived as a literal, backslash-prefixed path
+        # segment. os.path.abspath then resolved that bogus "\c:\..." against
+        # the CURRENT drive, silently producing a doubled, unrelated path
+        # ("C:\c:\Users\...") instead of raising.
+        #
+        # Compared via os.path.normcase, not raw equality: this Python's
+        # nturl2path does not normalise a drive letter's case in either
+        # direction (checked directly against its actual source, not assumed
+        # -- a stale assumption that it upper-cased the drive was exactly
+        # what made the first version of this test wrongly expect "C:\\..."
+        # back from a lower-case "c%3A" input). Windows paths are
+        # case-insensitive, so comparing case-insensitively is not a weaker
+        # test of the fix -- it's the same comparison the actual caller,
+        # diagnostics.py's _is_target_uri, already uses for this exact
+        # reason.
+        assert os.path.normcase(sess.uri_to_path("file:///c%3A/Users/x/b.ts")) == \
+            os.path.normcase(os.path.abspath(r"C:\Users\x\b.ts"))
+        # Lowercase hex digit in the escape -- some encoders emit '%3a'.
+        assert os.path.normcase(sess.uri_to_path("file:///c%3a/Users/x/b.ts")) == \
+            os.path.normcase(os.path.abspath(r"C:\Users\x\b.ts"))
+        # An ordinary escape (a literal space) elsewhere in the path must
+        # still decode correctly -- confirms the fix only special-cases the
+        # drive-letter colon and does not disturb url2pathname's own
+        # per-segment unquoting of everything else.
+        assert os.path.normcase(sess.uri_to_path("file:///c%3A/Users/x/a%20dir/b.ts")) == \
+            os.path.normcase(os.path.abspath(r"C:\Users\x\a dir\b.ts"))
+
     def test_uri_to_path_resolves_the_unc_authority_not_the_current_drive(self):
         # Regression: urlparse puts a UNC host in `netloc`, not `path`.
         # Reading only `.path` silently dropped the host and substituted the

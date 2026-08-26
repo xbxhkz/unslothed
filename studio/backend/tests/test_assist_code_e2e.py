@@ -8,6 +8,24 @@ These are the only tests here that prove the thing actually works -- the fake
 server proves the client is correct about a protocol we defined, and this
 proves we were right about the protocol a real server implements.
 
+Install with a PINNED TypeScript, not just `npm install -g
+typescript-language-server typescript`: that bare command currently
+resolves `typescript` to the 7.x line, a native-port preview that ships no
+`tsserver.js` -- the classic JS server `typescript-language-server` actually
+talks to. Every test here then fails at the LSP handshake with "Could not
+find a valid TypeScript installation," which reads like a missing-server
+problem, not a wrong-version one, because `shutil.which` above only checks
+that `typescript-language-server` itself is on PATH; it has no way to
+inspect what TypeScript it will resolve at start time. There is no
+`package.json` or CI step pinning this deliberately -- a manifest or a CI
+edit would widen this branch's minimal upstream seam -- so this docstring
+and the skip reason below are where a fresh machine actually hitting this
+will look:
+
+    npm install -g typescript-language-server typescript@5
+
+(5.9.3 confirmed to ship `tsserver.js`; any 5.x should.)
+
 Two real, protocol-level bugs were found and fixed by getting these to pass
 for real rather than accepting a skip (see session.py's ``uri_to_path`` and
 diagnostics.py's ``_is_target_uri``): typescript-language-server (via
@@ -44,7 +62,13 @@ import pytest
 
 pytestmark = pytest.mark.skipif(
     shutil.which("typescript-language-server") is None,
-    reason = "typescript-language-server not installed; run: npm install -g typescript-language-server typescript",
+    reason = (
+        "typescript-language-server not installed; run: "
+        "npm install -g typescript-language-server typescript@5 "
+        "-- the bare 'typescript' (no @5) pulls the TypeScript 7.x native-port "
+        "preview, which ships no tsserver.js and fails every test below at the "
+        "LSP handshake instead of here"
+    ),
 )
 
 
