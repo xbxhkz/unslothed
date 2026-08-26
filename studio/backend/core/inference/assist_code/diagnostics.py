@@ -28,8 +28,10 @@ Task 8) can turn it into user-facing text the same way it already handles
 other session-level failures, rather than this module silently downgrading a
 read failure into a false "no problems found".
 """
+import os
+
 from . import jsonrpc
-from .session import path_to_uri
+from .session import path_to_uri, uri_to_path
 
 SEVERITY = {1: "error", 2: "warning", 3: "info", 4: "hint"}
 
@@ -62,6 +64,7 @@ def collect(session, file_path, *, timeout = 15.0):
     """
     session.open_document(file_path)
     uri = path_to_uri(file_path)
+    target = os.path.abspath(file_path)
 
     if session.supports("diagnosticProvider"):
         try:
@@ -76,9 +79,36 @@ def collect(session, file_path, *, timeout = 15.0):
 
     note = session.wait_notification(
         "textDocument/publishDiagnostics",
-        lambda p: p.get("uri") == uri,
+        lambda p: _is_target_uri(p.get("uri"), target),
         timeout = timeout,
     )
     if note is None:
         return []
     return _normalise(note.get("diagnostics"))
+
+
+def _is_target_uri(candidate_uri, target_path):
+    """Whether a pushed notification's URI names ``target_path``.
+
+    Decodes and compares real paths rather than comparing URI strings, and
+    is why this exists at all: a real server is not guaranteed to echo back
+    exactly the URI string we sent it (see ``uri_to_path``'s own docstring --
+    typescript-language-server's own URIs percent-encode the drive-letter
+    colon, this module's ``path_to_uri`` does not), so a plain `==` between
+    the two would never match and every diagnostics call against a real
+    server would silently time out and read as "clean," which is precisely
+    how this was found: a file with a genuine, deliberately-introduced type
+    error reported "No problems found" against a real server while every
+    fake-server test -- which builds its notifications with this SAME
+    module's ``path_to_uri``, so the strings always matched themselves --
+    stayed green. ``os.path.normcase`` on the comparison, not just
+    ``os.path.abspath``, because Windows paths are case-insensitive and a
+    real server is free to echo back a differently-cased drive letter or
+    directory segment for the identical file, as this one did.
+    """
+    if not candidate_uri:
+        return False
+    try:
+        return os.path.normcase(uri_to_path(candidate_uri)) == os.path.normcase(target_path)
+    except Exception:
+        return False

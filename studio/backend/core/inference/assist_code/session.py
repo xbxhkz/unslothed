@@ -10,6 +10,7 @@ uneven across servers -- so the answer is read from the handshake rather than
 hard-coded per language.
 """
 import os
+import re
 import subprocess
 import sys
 import urllib.parse
@@ -64,6 +65,30 @@ def uri_to_path(uri):
     # a caller has no signal anything went wrong. Folding netloc back in
     # front of path before url2pathname reconstructs the UNC form correctly.
     path = f"//{parsed.netloc}{parsed.path}" if parsed.netloc else parsed.path
+    # Found only against a REAL server (Task 8's end-to-end suite --
+    # every fake-server test builds its URIs with this module's own
+    # path_to_uri, which never percent-encodes the colon, so the round trip
+    # always matched itself and this never showed up there). vscode-uri --
+    # what typescript-language-server and most real LSP servers are built
+    # on -- percent-encodes the drive-letter colon in a Windows file URI
+    # ("file:///c%3A/Users/..."), not the literal colon this module's own
+    # path_to_uri emits ("file:///C:/Users/..."). `url2pathname` below
+    # decides whether a path carries a drive letter at all by looking for a
+    # LITERAL ':' in the still-encoded string; a colon that only exists as
+    # '%3A' is invisible to that check, so the whole path falls through its
+    # "no drive specifier" branch, and the drive letter survives as a
+    # literal, backslash-prefixed path SEGMENT instead of being recognised
+    # as a drive. `os.path.abspath` then resolves that bogus leading
+    # "\c:\..." against the CURRENT drive, silently producing a doubled,
+    # unrelated path ("C:\c:\Users\...") instead of raising -- which is how
+    # this surfaced: not as a crash, but as `code_definition` and
+    # `code_references` printing a real symbol's location under a path that
+    # does not exist. Decoding just the drive-letter colon up front (not the
+    # whole string -- a literal space or other percent-escape elsewhere in
+    # the path still needs to survive for url2pathname's own per-segment
+    # unquote to handle) makes the literal-colon branch fire correctly for
+    # either convention.
+    path = re.sub(r"^(/[A-Za-z])%3[Aa]", r"\1:", path)
     return os.path.abspath(urllib.request.url2pathname(path))
 
 
