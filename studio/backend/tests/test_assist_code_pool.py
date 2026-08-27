@@ -200,6 +200,84 @@ class TestInFlightProtection:
         pool.reap_idle()
         assert pool.stats()["live"] == 0
 
+    def test_the_reaper_runs_on_its_own_without_anyone_calling_reap_idle(
+            self, tmp_path, monkeypatch):
+        """The whole finding: reap_idle() had no production caller.
+
+        Nothing in this test calls reap_idle(). If the background thread is
+        not started, or is started but never drives the sweep, the session
+        stays live and this fails -- which is exactly what it did before the
+        reaper existed, and what the previous tests could not detect because
+        they all invoked reap_idle() by hand.
+
+        _reaper_started is reset so the thread is started fresh with the
+        short interval below; monkeypatch restores it afterwards.
+        """
+        monkeypatch.setattr(pool, "REAP_INTERVAL_SECONDS", 0.05)
+        monkeypatch.setattr(pool, "IDLE_TIMEOUT_SECONDS", 0.1)
+        monkeypatch.setattr(pool, "_reaper_started", False)
+
+        pool.acquire("typescript", str(tmp_path), _factory(tmp_path))
+        assert pool.stats()["live"] == 1
+
+        deadline = time.monotonic() + 15.0
+        while time.monotonic() < deadline and pool.stats()["live"]:
+            time.sleep(0.05)
+        assert pool.stats()["live"] == 0, "the background reaper never reclaimed an idle session"
+
+    def test_the_reaper_does_not_reclaim_an_in_flight_session(self, tmp_path, monkeypatch):
+        """An idle timeout of 0 with a lease held: the reaper must skip it.
+
+        Same invariant reap_idle() already had, but exercised through the
+        thread that now drives it -- a reaper that ignored _in_flight would
+        close a server out from under a request in progress.
+        """
+        monkeypatch.setattr(pool, "REAP_INTERVAL_SECONDS", 0.05)
+        monkeypatch.setattr(pool, "IDLE_TIMEOUT_SECONDS", 0)
+        monkeypatch.setattr(pool, "_reaper_started", False)
+
+        with pool.lease("typescript", str(tmp_path), _factory(tmp_path)) as leased:
+            time.sleep(0.6)   # many reaper iterations at a 0.05s interval
+            assert pool.stats()["live"] == 1, "the reaper closed an in-flight session"
+            assert leased.is_healthy()
+
+    def test_key_locks_do_not_grow_without_bound(self, tmp_path):
+        """_key_locks used to gain a permanent entry per (language, root).
+
+        A lock may only be dropped when nobody holds it AND no session lives
+        under the key, so this checks both transitions: after the session is
+        reaped the entry goes, and shutdown_all() clears whatever is left.
+        """
+        roots = []
+        for i in range(6):
+            root = tmp_path / f"ws{i}"
+            root.mkdir()
+            roots.append(root)
+            pool.acquire("typescript", str(root), _factory(root))
+
+        assert len(pool._key_locks) <= len(pool._sessions) + 1, (
+            f"key locks outlived their sessions: "
+            f"{len(pool._key_locks)} locks for {len(pool._sessions)} sessions")
+
+        pool.shutdown_all()
+        assert pool._key_locks == {}, "shutdown_all must clear _key_locks"
+
+    def test_a_key_lock_is_released_even_when_the_server_fails_to_start(self, tmp_path):
+        """A failed start must not leak a key lock's user count.
+
+        If the borrow were not returned in a finally, the count would never
+        reach 0 and the entry could never be discarded -- reintroducing the
+        unbounded growth for exactly the workspaces that fail repeatedly.
+        """
+        key = pool._key("typescript", str(tmp_path))
+
+        def broken(_root):
+            raise sess.SessionStartFailed("nope")
+
+        with pytest.raises(sess.SessionStartFailed):
+            pool.acquire("typescript", str(tmp_path), broken)
+        assert key not in pool._key_locks, "a failed start leaked its key lock"
+
     def test_lease_decrements_in_flight_even_on_an_exception(self, tmp_path):
         key = pool._key("typescript", str(tmp_path))
         with pytest.raises(ValueError):

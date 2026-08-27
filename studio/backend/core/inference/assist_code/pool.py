@@ -20,6 +20,14 @@ could be, and under review was, evicted and closed out from under its
 caller -- who then saw an unrelated ``LspClosed`` instead of its own
 request completing. ``mcp_client._evict_stdio_lru_locked`` (:748) is the
 model this was missing: it filters eviction candidates to ``in_flight == 0``.
+
+Idle reaping RUNS. ``reap_idle()`` existed, was documented and was tested,
+and was called by nothing but its own tests -- so ``IDLE_TIMEOUT_SECONDS``
+never once fired outside the suite, and the argument two paragraphs up
+about 200MB-1GB per server was being made by a module that never reclaimed
+any of it. A lazily-started daemon thread (``_ensure_reaper_started_locked``,
+after ``mcp_client._stdio_session_reaper`` :813) now drives it. Lazy so a
+process that never uses a code tool never carries the thread.
 """
 import atexit
 import contextlib
@@ -36,25 +44,76 @@ except Exception:  # pragma: no cover - outside the app
 
 MAX_SESSIONS = 4
 IDLE_TIMEOUT_SECONDS = 600
+# How often the background reaper wakes. Mirrors mcp_client's
+# _STDIO_SESSION_REAP_INTERVAL (:292). Read fresh on each iteration so it can
+# be lowered in tests without restarting the thread.
+REAP_INTERVAL_SECONDS = 30.0
 
 _lock = threading.Lock()
 _key_locks = {}
 _sessions = {}      # key -> session
 _last_used = {}     # key -> monotonic timestamp
 _in_flight = {}      # key -> active-lease count; guarded by _lock, see lease()
+_reaper_started = False
 
 
 def _key(language, root):
     return (language, os.path.abspath(root))
 
 
-def _key_lock(key):
+class _KeyLock:
+    """A per-key lock plus a count of who is currently interested in it.
+
+    The count is the whole point, and it is why this is a class rather than
+    the bare ``threading.Lock`` this module used to store. Without it there
+    is no safe moment to remove an entry from ``_key_locks``: dropping one
+    while another thread is blocked on it hands the next arrival a DIFFERENT
+    lock object for the same key, which is exactly the "two threads both
+    spawn a server for the same workspace" race the per-key lock exists to
+    prevent. So the old code never removed one, and ``_key_locks`` grew
+    without bound -- one permanent entry per (language, root) ever seen.
+
+    Follows ``mcp_client._StdioKeyLock`` (:540) and its
+    borrow/return/discard trio (:599-:613), which pool.py already cites as
+    its model and had adopted everything else from.
+    """
+
+    __slots__ = ("lock", "users")
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.users = 0
+
+
+def _borrow_key_lock(key):
+    """Return a stable per-key lock, marking the caller as interested."""
     with _lock:
-        lk = _key_locks.get(key)
-        if lk is None:
-            lk = threading.Lock()
-            _key_locks[key] = lk
-        return lk
+        key_lock = _key_locks.get(key)
+        if key_lock is None:
+            key_lock = _KeyLock()
+            _key_locks[key] = key_lock
+        key_lock.users += 1
+        return key_lock
+
+
+def _discard_key_lock_locked(key):
+    """Caller holds ``_lock``. Drop the key's lock if nothing needs it.
+
+    Two conditions, both required: nobody is currently holding or waiting on
+    it (``users == 0``), and no session exists under the key (a live session
+    will be acquired again, and re-creating its lock in between would let two
+    threads race for it). Mirrors ``mcp_client._discard_stdio_key_lock``
+    (:606).
+    """
+    key_lock = _key_locks.get(key)
+    if key_lock is not None and key_lock.users == 0 and key not in _sessions:
+        _key_locks.pop(key, None)
+
+
+def _return_key_lock(key, key_lock):
+    with _lock:
+        key_lock.users -= 1
+        _discard_key_lock_locked(key)
 
 
 def _close_quietly(session):
@@ -100,6 +159,11 @@ def _evict_locked():
         victim_key = min(idle, key = lambda k: _last_used.get(k, 0))
         victims.append((victim_key, _sessions.pop(victim_key)))
         _last_used.pop(victim_key, None)
+        # An evicted key may now be droppable. Without this, eviction was a
+        # second path that left a key lock behind forever -- caught by
+        # test_key_locks_do_not_grow_without_bound, which saw 6 locks for 4
+        # sessions after the pool had cycled through six workspaces.
+        _discard_key_lock_locked(victim_key)
     return victims, overshoot
 
 
@@ -129,30 +193,39 @@ def _acquire_core(key, root, factory, start_timeout, *, mark_in_flight):
     it -- correctly, nobody had claimed it yet) or fully follows it (sees
     in_flight == 1, correctly skips it). It can no longer land in between.
     """
-    with _key_lock(key):
-        stale = None
-        with _lock:
-            existing = _sessions.get(key)
-            if existing is not None:
-                if existing.is_healthy():
-                    _last_used[key] = time.monotonic()
-                    if mark_in_flight:
-                        _in_flight[key] = _in_flight.get(key, 0) + 1
-                    return existing
-                stale = _sessions.pop(key, None)
-                _last_used.pop(key, None)
-        if stale is not None:
-            _close_quietly(stale)
+    key_lock = _borrow_key_lock(key)
+    try:
+        with key_lock.lock:
+            stale = None
+            with _lock:
+                existing = _sessions.get(key)
+                if existing is not None:
+                    if existing.is_healthy():
+                        _last_used[key] = time.monotonic()
+                        if mark_in_flight:
+                            _in_flight[key] = _in_flight.get(key, 0) + 1
+                        return existing
+                    stale = _sessions.pop(key, None)
+                    _last_used.pop(key, None)
+            if stale is not None:
+                _close_quietly(stale)
 
-        session = factory(os.path.abspath(root))
-        session.start(timeout = start_timeout)   # SessionStartFailed propagates
-        with _lock:
-            victims, overshoot = _evict_locked()
-            _sessions[key] = session
-            _last_used[key] = time.monotonic()
-            if mark_in_flight:
-                _in_flight[key] = _in_flight.get(key, 0) + 1
-            live_count = len(_sessions)
+            session = factory(os.path.abspath(root))
+            session.start(timeout = start_timeout)   # SessionStartFailed propagates
+            with _lock:
+                victims, overshoot = _evict_locked()
+                _sessions[key] = session
+                _last_used[key] = time.monotonic()
+                if mark_in_flight:
+                    _in_flight[key] = _in_flight.get(key, 0) + 1
+                live_count = len(_sessions)
+                # Started here, not at import: a process that never uses a
+                # code tool should not carry a thread for one. Mirrors
+                # mcp_client (:682), which likewise starts its reaper in the
+                # locked section that publishes a session.
+                _ensure_reaper_started_locked()
+    finally:
+        _return_key_lock(key, key_lock)
     # Logging and closing happen outside _lock, and each logger call is
     # individually guarded: a broken logger (see _atexit_cleanup) must
     # never stop a victim from being closed, and must never propagate out
@@ -254,12 +327,73 @@ def lease(language, root, factory, *, start_timeout = 60.0):
                 victim_key = min(idle, key = lambda k: _last_used.get(k, 0))
                 victims.append((victim_key, _sessions.pop(victim_key)))
                 _last_used.pop(victim_key, None)
+                _discard_key_lock_locked(victim_key)   # see _evict_locked
         for victim_key, victim in victims:
             try:
                 logger.info("assist_code: evicting idle language server for %s", victim_key)
             except Exception:
                 pass
             _close_quietly(victim)
+
+
+def _ensure_reaper_started_locked():
+    """Caller holds ``_lock``. Start the idle reaper once, lazily.
+
+    ``reap_idle()`` was written, documented and tested, and then never
+    called by anything but its own tests -- so ``IDLE_TIMEOUT_SECONDS`` never
+    fired in production. After a single code tool call a language server
+    stayed resident until a fifth distinct workspace forced an LRU eviction
+    or the process exited; at ``MAX_SESSIONS = 4`` that is up to ~4GB held
+    indefinitely after one chat message. This module's own docstring makes
+    the case that this memory matters ("Language servers are 200MB-1GB
+    each") -- it simply never ran the mechanism that reclaims it.
+
+    ``mcp_client._stdio_session_reaper`` (:813) is the missing piece, the
+    same file this module already borrowed ``_evict_stdio_lru_locked`` and
+    ``_release_stdio_session`` from.
+
+    Starting the thread while holding ``_lock`` is safe and matches
+    mcp_client: the new thread's first action is to sleep, so it cannot
+    contend for the lock the starter is holding.
+    """
+    global _reaper_started
+    if _reaper_started:
+        return
+    _reaper_started = True
+    try:
+        threading.Thread(
+            target = _reaper, name = "assist-code-lsp-reaper", daemon = True,
+        ).start()
+    except Exception:
+        # A process that cannot spawn the reaper still has a working pool;
+        # it just keeps the pre-existing behaviour of never reaping.
+        _reaper_started = False
+
+
+def _reaper():
+    """Drive ``reap_idle()`` forever. Daemon thread; must never raise.
+
+    Daemon so it can never hold the interpreter open, and the loop body is
+    wrapped so a single bad iteration cannot kill the thread and silently
+    restore the "nothing ever reaps" behaviour this exists to fix.
+
+    ``REAP_INTERVAL_SECONDS`` is read fresh each iteration rather than
+    captured, so a test can lower it without restarting the thread.
+
+    The logger call is guarded like every other in this module: during
+    interpreter shutdown a daemon thread can still be mid-loop while logging
+    handlers' streams are already closed, and a write then raises (see
+    ``_atexit_cleanup``).
+    """
+    while True:
+        time.sleep(max(0.05, REAP_INTERVAL_SECONDS))
+        try:
+            reap_idle()
+        except Exception as exc:  # noqa: BLE001 - a bad sweep must not kill the thread
+            try:
+                logger.debug("assist_code: idle reaper iteration failed: %s", exc)
+            except Exception:
+                pass
 
 
 def reap_idle():
@@ -272,9 +406,17 @@ def reap_idle():
             if now - used >= IDLE_TIMEOUT_SECONDS:
                 stale.append((key, _sessions.pop(key, None)))
                 _last_used.pop(key, None)
+        # Now that the sessions are gone, the keys' locks may be droppable --
+        # this is the only place besides _return_key_lock where a key stops
+        # having a session. Mirrors mcp_client's own reap (:805).
+        for key, _session in stale:
+            _discard_key_lock_locked(key)
     for key, session in stale:
         if session is not None:
-            logger.info("assist_code: reaping idle language server for %s", key)
+            try:
+                logger.info("assist_code: reaping idle language server for %s", key)
+            except Exception:
+                pass
             _close_quietly(session)
 
 
@@ -290,12 +432,20 @@ def shutdown_all():
     "later" for an in-flight request to finish into once the process is
     going down, so the in_flight guard that protects acquire()/reap_idle()
     does not apply here.
+
+    ``_key_locks`` is cleared here too. It was the one map this function
+    missed, so every (language, root) ever seen left a permanent entry behind
+    even across a full shutdown -- the unbounded-growth half of the same
+    finding that ``_KeyLock``'s user count fixes for the steady-state case.
+    Safe at this point for the same reason closing in-flight sessions is:
+    this is process teardown, so there is no later arrival to race with.
     """
     with _lock:
         sessions = list(_sessions.values())
         _sessions.clear()
         _last_used.clear()
         _in_flight.clear()
+        _key_locks.clear()
     for s in sessions:
         _close_quietly(s)
 
