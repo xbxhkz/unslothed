@@ -91,11 +91,31 @@ def _session_for(path, session_id, start_timeout):
     def factory(resolved_root):
         return sess.Session(command, resolved_root, language = language)
 
+    # The except below must cover the ACQUISITION only, never the yield.
+    #
+    # With `yield` inside the `try`, a handler body that raised
+    # SessionStartFailed would have it thrown back in at the yield by
+    # contextlib, caught here as if the server had failed to start, and
+    # answered with a second yield -- which makes contextlib raise
+    # RuntimeError("generator didn't stop after throw()") and destroys the
+    # real error on its way past. Inert today (no handler raises it), but
+    # the failure mode is silent replacement of a genuine error, so it is
+    # not a shape to leave lying around.
+    #
+    # ExitStack separates the two: enter_context() is the only thing the
+    # except can see, and the yield then happens under `with stack`, which
+    # still releases the lease on any exception -- including one thrown in
+    # at the yield.
+    stack = contextlib.ExitStack()
     try:
-        with pool.lease(language, root, factory, start_timeout = start_timeout) as session:
-            yield session, resolved, None
+        session = stack.enter_context(
+            pool.lease(language, root, factory, start_timeout = start_timeout))
     except sess.SessionStartFailed as e:
+        stack.close()
         yield None, None, str(e)
+        return
+    with stack:
+        yield session, resolved, None
 
 
 _MAX_SERVER_MESSAGE = 200

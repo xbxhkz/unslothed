@@ -145,6 +145,59 @@ class TestErrorPropagation:
         assert "rejected" in out.lower(), out
 
 
+class TestSessionForGeneratorSafety:
+    """``_session_for``'s except must not straddle its yield.
+
+    With the yield inside the try, a handler body raising SessionStartFailed
+    would have it thrown back in at the yield by contextlib, be caught as if
+    the SERVER had failed to start, and be answered with a second yield --
+    at which point contextlib raises RuntimeError("generator didn't stop
+    after throw()"), and the real error is gone. No handler raises it today,
+    so this is a shape test, not a bug repro: the point is that the shape can
+    no longer silently replace an error.
+    """
+
+    @pytest.fixture
+    def workspace(self, tmp_path, monkeypatch):
+        from core.inference import tools
+        from core.inference.assist_code import pool, servers
+        monkeypatch.setattr(tools, "_get_workdir", lambda _sid = None: str(tmp_path))
+        monkeypatch.setattr(
+            servers, "server_command",
+            lambda language, installer = None: [sys.executable, _FAKE_SERVER, "normal"],
+        )
+        (tmp_path / "a.ts").write_text("const a = 1\n")
+        yield tmp_path
+        pool.shutdown_all()
+
+    def test_an_error_raised_inside_the_block_reaches_the_caller_intact(self, workspace):
+        from core.inference import assist_code
+        from core.inference.assist_code.session import SessionStartFailed
+
+        with pytest.raises(SessionStartFailed) as excinfo:
+            with assist_code._session_for("a.ts", "genr", 20.0) as (session, resolved, err):
+                assert err is None and session is not None
+                raise SessionStartFailed("the real error")
+
+        assert "the real error" in str(excinfo.value)
+
+    def test_a_genuine_start_failure_still_becomes_text(self, tmp_path, monkeypatch):
+        """The path the except is actually FOR must keep working: a server
+        that cannot start yields error text rather than raising."""
+        from core.inference import tools
+        from core.inference.assist_code import servers
+        import core.inference.assist_code as assist_code
+        monkeypatch.setattr(tools, "_get_workdir", lambda _sid = None: str(tmp_path))
+        monkeypatch.setattr(
+            servers, "server_command",
+            lambda language, installer = None: ["definitely-not-a-real-binary-xyz"],
+        )
+        (tmp_path / "a.ts").write_text("const a = 1\n")
+        with assist_code._session_for("a.ts", "genr2", 10.0) as (session, resolved, err):
+            assert session is None
+            assert err and isinstance(err, str)
+
+
 class TestServerMessageIsCapped:
     """A server's rejection message must not carry a stack trace into the
     model's context.
