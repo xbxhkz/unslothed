@@ -153,3 +153,27 @@ def test_references_finds_the_call_site(ts_project):
     out = tools.execute_tool(
         "code_references", {"path": "lib.ts", "symbol": "addNumbers"}, session_id = "e2e")
     assert "main.ts" in out, out
+
+
+def test_symbols_works_as_the_very_first_call_in_a_fresh_session(ts_project):
+    """``code_symbols`` must work when NOTHING has been opened yet.
+
+    This is the one ordering that matters and the one no other test covered.
+    ``code_symbols`` is the tool a model reaches for precisely *before* it has
+    opened anything -- "find this name, I don't know which file holds it" --
+    so the first call in a session is its normal case, not an edge case.
+
+    ``pool.shutdown_all()`` is what makes this test able to fail: the
+    ``ts_project`` fixture has already warmed a session against this
+    workspace, and any test that runs after another tool in the same session
+    passes whether or not the bug is present. Discarding the pooled session
+    forces a brand-new server process with no document ever opened against
+    it, which is the state a real first call arrives in.
+    """
+    from core.inference import tools
+    from core.inference.assist_code import pool
+    pool.shutdown_all()
+    out = tools.execute_tool(
+        "code_symbols", {"path": "lib.ts", "query": "addNumbers"}, session_id = "e2e-fresh")
+    assert "rejected this request" not in out, out
+    assert "addNumbers" in out, out

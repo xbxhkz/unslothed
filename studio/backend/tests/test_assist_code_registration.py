@@ -143,3 +143,49 @@ class TestErrorPropagation:
         out = tools.execute_tool("code_diagnostics", {"path": "a.ts"}, session_id = "propagation")
         assert "no problems" not in out.lower(), out
         assert "rejected" in out.lower(), out
+
+
+class TestServerMessageIsCapped:
+    """A server's rejection message must not carry a stack trace into the
+    model's context.
+
+    tsserver answers a request it cannot serve with a one-line diagnosis
+    followed by a full JavaScript stack trace -- a dozen-plus lines of
+    node_modules paths. Interpolated whole (which is what ``execute`` did),
+    that is what a single failed ``code_symbols`` call spent on noise.
+
+    Driven through the real ``execute`` dispatcher rather than by calling
+    ``_short`` directly, so it exercises the actual interpolation site: with
+    the cap reverted to ``e.server_message``, this test fails.
+    """
+
+    def test_a_stack_trace_is_reduced_to_its_first_line(self, monkeypatch):
+        from core.inference import assist_code
+        from core.inference.assist_code import jsonrpc
+
+        trace = "\n".join(
+            ["No Project.", "Error: No Project."]
+            + [f"    at Object.thing (C:\\node_modules\\typescript\\lib\\typescript.js:{n}:11)"
+               for n in range(186170, 186190)]
+        )
+
+        def boom(_arguments, _session_id, _budget):
+            raise jsonrpc.LspError("workspace/symbol", {"code": 1, "message": trace})
+
+        monkeypatch.setitem(assist_code._HANDLERS, "code_symbols", boom)
+        out = assist_code.execute("code_symbols", {"query": "x", "path": "a.ts"})
+
+        assert "rejected this request" in out, out
+        assert "No Project." in out, out
+        assert "typescript.js" not in out, out
+        assert "    at " not in out, out
+        assert len(out.splitlines()) == 1, out
+
+    def test_a_single_long_line_is_truncated_visibly(self):
+        from core.inference import assist_code
+        assert assist_code._short("x" * 500).endswith("...")
+        assert len(assist_code._short("x" * 500)) <= assist_code._MAX_SERVER_MESSAGE + 3
+
+    def test_a_short_message_is_passed_through_unchanged(self):
+        from core.inference import assist_code
+        assert assist_code._short("Invalid params") == "Invalid params"

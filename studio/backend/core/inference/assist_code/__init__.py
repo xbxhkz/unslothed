@@ -98,6 +98,34 @@ def _session_for(path, session_id, start_timeout):
         yield None, None, str(e)
 
 
+_MAX_SERVER_MESSAGE = 200
+
+
+def _short(message):
+    """First line of a server message, capped to ``_MAX_SERVER_MESSAGE`` chars.
+
+    A language server's rejection message is not written for a model. tsserver
+    answers a request it cannot serve with a one-line summary followed by a
+    full JavaScript stack trace -- a dozen-plus lines of node_modules paths
+    and line numbers with no bearing on anything the model can act on.
+    Interpolated whole, that displaced real context with noise.
+
+    The first line is the part that carries the diagnosis ("No Project.",
+    "Could not find source file"); everything after it is provenance for a
+    JS developer debugging the server itself. Truncation is marked with an
+    ellipsis rather than silent, so a genuinely long single-line message is
+    never mistaken for a complete one.
+    """
+    text = str(message or "").strip()
+    if not text:
+        return ""
+    first = text.splitlines()[0].strip()
+    truncated = len(first) > _MAX_SERVER_MESSAGE or "\n" in text.strip()
+    if len(first) > _MAX_SERVER_MESSAGE:
+        first = first[:_MAX_SERVER_MESSAGE].rstrip()
+    return f"{first}..." if truncated else first
+
+
 def _rel(path, session_id):
     try:
         from core.inference import tools as _tools
@@ -182,13 +210,33 @@ def _do_hover(arguments, session_id, budget):
 
 
 def _do_symbols(arguments, session_id, budget):
+    """Workspace-wide symbol search.
+
+    ``open_document(resolved)`` is not optional here, and this was the one
+    handler of the five that skipped it. ``workspace/symbol`` reads like a
+    workspace-level request that needs no particular file, and the resolved
+    path looks like it is only there to pick the workspace root -- which is
+    why it was originally discarded. But tsserver has no project loaded until
+    a document is opened, so a ``workspace/symbol`` sent first thing after the
+    handshake is rejected outright with ``No Project`` (plus a dozen lines of
+    JavaScript stack trace, which is what ``execute``'s ``_short`` now caps).
+
+    That made ``code_symbols`` fail on the FIRST call of every session and
+    succeed on every call after, because any other tool opens a document on
+    its way through. The ordering hid the bug from the suite: a test that runs
+    after another tool passes whether or not this line is here. It also made
+    the failure land on exactly the case the tool exists for -- "find this
+    name, I don't know which file holds it" is what a model asks *before* it
+    has opened anything.
+    """
     from . import navigation
     query = arguments.get("query")
     if not query or not str(query).strip():
         return "query is required"
-    with _session_for(arguments.get("path"), session_id, budget) as (session, _resolved, err):
+    with _session_for(arguments.get("path"), session_id, budget) as (session, resolved, err):
         if err:
             return err
+        session.open_document(resolved)
         found = navigation.symbols(session, str(query).strip(), timeout = min(budget, 20.0))
         return _format_locations(found, session_id, f"No symbol matching {query!r} was found.")
 
@@ -234,7 +282,7 @@ def execute(name, arguments, *, session_id = None, timeout = None, cancel_event 
     except jsonrpc.LspError as e:
         return (
             f"{name}: the language server rejected this request "
-            f"(code {e.code}): {e.server_message or e}"
+            f"(code {e.code}): {_short(e.server_message or e)}"
         )
     except jsonrpc.LspClosed as e:
         return (
