@@ -130,14 +130,35 @@ def definition(session, file_path, position, *, timeout = 30.0):
     propagate. See the module docstring for why an empty list must not stand
     in for any of those here.
     """
+    locations, _timed_out = definition_origins(session, file_path, position, timeout = timeout)
+    return locations
+
+
+def definition_origins(session, file_path, position, *, timeout = 30.0):
+    """``definition()``, but with a timeout the caller can tell apart.
+
+    ``definition()`` folds ``LspTimeout`` into ``[]``, which is right for a
+    caller rendering results -- a timeout is genuinely ambiguous between
+    "still working" and "nothing to report."
+
+    It is NOT right for a caller making a confinement decision. The tool
+    layer resolves a hover's definition to decide whether the hover text
+    describes a file outside the sandbox, and there "no definition found"
+    (safe: nothing located to disclose) and "the lookup timed out" (unknown:
+    could be anywhere) must not look the same. Collapsing them would make an
+    unverified symbol fail OPEN, which is the wrong direction for a check
+    whose entire purpose is to withhold.
+
+    Returns ``(locations, timed_out)``.
+    """
     _open_ready(session, file_path)
     try:
         result = session.request("textDocument/definition", {
             "textDocument": {"uri": path_to_uri(file_path)}, "position": position,
         }, timeout = timeout)
     except jsonrpc.LspTimeout:
-        return []
-    return _locations(result)
+        return [], True
+    return _locations(result), False
 
 
 def references(session, file_path, position, *, timeout = 30.0):

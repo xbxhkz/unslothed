@@ -102,6 +102,93 @@ def ts_project(tmp_path, monkeypatch):
     pool.shutdown_all()
 
 
+@pytest.fixture
+def escaping_project(tmp_path, monkeypatch):
+    """A sandbox whose program graph legitimately reaches outside it.
+
+    Confinement was enforced only on tool ARGUMENTS. A language server's
+    program graph is not built from our arguments -- an ordinary relative
+    import pulls in a file outside the workspace root, and every location and
+    hover string the server then returns was passed to the model unfiltered.
+    The model can create the triggering file itself (`edit_file`, `python`
+    and `terminal` are all Studio tools), so this is reachable by argument
+    choice plus one file write, and it bypasses the file-read confinement
+    every other tool honours.
+
+    `outside` is a SIBLING of the workdir, not a child, so it is genuinely
+    outside `_get_workdir` while still being reachable by `../`.
+    """
+    from core.inference import tools
+    workdir = tmp_path / "wb-inside"
+    workdir.mkdir()
+    outside = tmp_path / "wb-outside"
+    outside.mkdir()
+    monkeypatch.setattr(tools, "_get_workdir", lambda _sid = None: str(workdir))
+
+    (outside / "secret.ts").write_text(
+        "/** TOP SECRET: the deploy key is sk-live-DEADBEEF */\n"
+        "export const SECRET_VALUE = 'sk-live-DEADBEEF'\n"
+    )
+    (workdir / "tsconfig.json").write_text('{"compilerOptions":{"strict":true}}')
+    (workdir / "app.ts").write_text(
+        "import { SECRET_VALUE } from '../wb-outside/secret'\n"
+        "export function useIt(): string {\n"
+        "  return SECRET_VALUE\n"
+        "}\n"
+    )
+    yield workdir
+    from core.inference.assist_code import pool
+    pool.shutdown_all()
+
+
+class TestResultSideConfinement:
+    """Confinement must hold on what the server RETURNS, not just on what we
+    send it. An escape must never render as a clean empty result either --
+    that is this branch's governing principle, and the reason LspError exists
+    as a distinct type.
+    """
+
+    def test_definition_withholds_an_outside_location_and_says_so(self, escaping_project):
+        from core.inference import tools
+        out = tools.execute_tool(
+            "code_definition", {"path": "app.ts", "symbol": "SECRET_VALUE"},
+            session_id = "esc")
+        assert "wb-outside" not in out, out
+        assert "secret.ts" not in out, out
+        assert "withheld" in out.lower(), out
+
+    def test_references_keeps_inside_hits_and_reports_the_withheld_one(self, escaping_project):
+        from core.inference import tools
+        out = tools.execute_tool(
+            "code_references", {"path": "app.ts", "symbol": "SECRET_VALUE"},
+            session_id = "esc")
+        assert "wb-outside" not in out, out
+        assert "app.ts" in out, out
+        assert "withheld" in out.lower(), out
+
+    def test_symbols_withholds_an_outside_match_and_says_so(self, escaping_project):
+        from core.inference import tools
+        out = tools.execute_tool(
+            "code_symbols", {"path": "app.ts", "query": "SECRET_VALUE"},
+            session_id = "esc")
+        assert "wb-outside" not in out, out
+        assert "secret.ts" not in out, out
+        assert "withheld" in out.lower(), out
+
+    def test_hover_does_not_disclose_the_outside_file_content(self, escaping_project):
+        """The worst of the four. TypeScript's literal-type inference puts a
+        const string's VALUE in the hover signature verbatim, and JSDoc text
+        comes through as-is -- so stripping to the signature line would not
+        have been enough: the signature IS the disclosure."""
+        from core.inference import tools
+        out = tools.execute_tool(
+            "code_hover", {"path": "app.ts", "symbol": "SECRET_VALUE"},
+            session_id = "esc")
+        assert "sk-live-DEADBEEF" not in out, out
+        assert "TOP SECRET" not in out, out
+        assert "deploy key" not in out, out
+
+
 def test_a_real_type_error_is_reported_with_its_line(ts_project):
     from core.inference import tools
     out = tools.execute_tool("code_diagnostics", {"path": "main.ts"}, session_id = "e2e")

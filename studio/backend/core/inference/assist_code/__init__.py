@@ -134,16 +134,75 @@ def _rel(path, session_id):
         return path
 
 
+def _outside_workdir(path, session_id):
+    """Whether ``path`` lies outside this conversation's working directory.
+
+    Fails CLOSED. If the check itself cannot be completed -- no workdir, an
+    unreadable path, anything -- the location is treated as outside and
+    withheld. A confinement check that fails open is not a confinement check;
+    the cost of a false withhold is a missing line the caller is told about,
+    and the cost of a false admit is the disclosure this exists to prevent.
+    """
+    if not path:
+        return True
+    try:
+        from core.inference import tools as _tools
+        return bool(_tools._is_outside_workdir(
+            os.path.abspath(path), _tools._get_workdir(session_id)))
+    except Exception:
+        return True
+
+
+def _withheld_note(count):
+    return (
+        f"{count} result(s) outside this conversation's working directory "
+        f"were withheld."
+    )
+
+
 def _format_locations(locations, session_id, empty_message):
-    if not locations:
-        return empty_message
+    """Render locations, dropping any that fall outside the sandbox.
+
+    Confinement was enforced only on tool ARGUMENTS, which is not where a
+    language server's answers come from. Its program graph is built from the
+    code, not from us: an ordinary relative import or a tsconfig ``include``
+    legitimately reaches outside the workspace root, and every location that
+    came back was rendered for the model unfiltered. Demonstrated against the
+    real server -- ``code_definition`` answering ``..\\wb-outside\\secret.ts``,
+    ``code_symbols`` listing a constant declared there. The model can write
+    the triggering file itself (``edit_file``, ``python`` and ``terminal``
+    are all Studio tools), so this was reachable by argument choice plus one
+    file write, and it bypassed the file-read confinement every other tool
+    honours.
+
+    The withheld COUNT is reported, and that is the load-bearing half. An
+    escape must never render as a clean empty result: "No references found"
+    is a legitimate answer that reads as "nothing calls this, safe to
+    delete," and silently filtering every hit into that same text would turn
+    a confinement action into a false fact about the code. When everything
+    was withheld, the count is returned INSTEAD of the empty message, not
+    alongside it -- saying "no references found" there would be untrue;
+    references were found, they were just not ours to show.
+    """
+    kept, withheld = [], 0
+    for loc in locations or []:
+        if _outside_workdir(loc.get("path"), session_id):
+            withheld += 1
+        else:
+            kept.append(loc)
+
+    if not kept:
+        return _withheld_note(withheld) if withheld else empty_message
+
     lines = []
-    for loc in locations[:_MAX_RESULTS]:
+    for loc in kept[:_MAX_RESULTS]:
         label = loc.get("name")
         prefix = f"{label} ({loc.get('kind', 'symbol')}) - " if label else ""
         lines.append(f"{prefix}{_rel(loc['path'], session_id)}:{loc['line']}:{loc['column']}")
-    if len(locations) > _MAX_RESULTS:
-        lines.append(f"... and {len(locations) - _MAX_RESULTS} more")
+    if len(kept) > _MAX_RESULTS:
+        lines.append(f"... and {len(kept) - _MAX_RESULTS} more")
+    if withheld:
+        lines.append(_withheld_note(withheld))
     return "\n".join(lines)
 
 
@@ -198,6 +257,49 @@ def _do_references(arguments, session_id, budget):
 
 
 def _do_hover(arguments, session_id, budget):
+    """Type information at a position, withheld if it describes an outside file.
+
+    Hover is the worst of the five for disclosure, and unlike the location
+    tools it cannot be fixed by filtering a path out of the output: the
+    disclosure is the text itself. Measured against the real server, hovering
+    a ``const`` imported from outside the sandbox returned
+
+        (alias) const SECRET_VALUE: "sk-live-DEADBEEF"
+        TOP SECRET: the deploy key is sk-live-DEADBEEF
+
+    TypeScript's literal-type inference puts a const string's VALUE into the
+    signature verbatim, and JSDoc comes through as-is. That is decisive
+    between the two remedies on the table: "strip everything but the
+    signature line" would have kept the first line, and the first line IS the
+    secret. So the content is suppressed in full when its definition lands
+    outside the working directory.
+
+    The check is the definition's location, resolved before the hover text is
+    ever fetched. ``any`` outside, not ``all``: a merged declaration can be
+    part-inside and part-outside, and hover returns one blob with no way to
+    attribute which half a given line came from -- so one outside origin
+    taints the answer.
+
+    Two non-obvious cases, both deliberate:
+
+    * No definition located at all (``[]``) -- the hover is shown. Nothing was
+      located, so there is no outside file whose content this could be
+      disclosing; the text is inference from the file already open, which is
+      inside by construction. Suppressing here would cost the tool most of
+      its value on ordinary inferred types for no gain.
+    * The definition lookup TIMED OUT -- the hover is withheld. This is why
+      ``definition_origins`` exists rather than reusing ``definition()``,
+      which folds a timeout into the same ``[]`` as "none found." Those must
+      not be the same answer to a confinement check: unverified has to fail
+      closed, or a slow server becomes the way through.
+
+    The known cost, accepted: a symbol defined in TypeScript's own bundled
+    ``lib.*.d.ts`` (``console``, ``Array``, ``Promise``) resolves outside the
+    workdir and so is withheld, even though its content is public. The rule
+    is unconditional by design -- it cannot know which outside file is
+    harmless -- and the model is told the text was withheld rather than being
+    given a wrong answer.
+    """
     from . import navigation
     with _session_for(arguments.get("path"), session_id, budget) as (session, resolved, err):
         if err:
@@ -205,7 +307,21 @@ def _do_hover(arguments, session_id, budget):
         position, err = _position(session, resolved, arguments)
         if err:
             return err
-        text = navigation.hover(session, resolved, position, timeout = min(budget, 20.0))
+        per_request = min(budget, 20.0)
+        origins, timed_out = navigation.definition_origins(
+            session, resolved, position, timeout = per_request)
+        if timed_out:
+            return (
+                "Type information was withheld: the definition lookup timed out, "
+                "so it could not be confirmed that this symbol is defined inside "
+                "this conversation's working directory."
+            )
+        if any(_outside_workdir(o.get("path"), session_id) for o in origins):
+            return (
+                "Type information was withheld: this symbol is defined outside "
+                "this conversation's working directory."
+            )
+        text = navigation.hover(session, resolved, position, timeout = per_request)
         return text or "No type information available at that position."
 
 
