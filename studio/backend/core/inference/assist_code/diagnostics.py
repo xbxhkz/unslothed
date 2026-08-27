@@ -31,7 +31,7 @@ read failure into a false "no problems found".
 import os
 
 from . import jsonrpc
-from .session import path_to_uri, uri_to_path
+from .session import is_same_file_uri, path_to_uri
 
 SEVERITY = {1: "error", 2: "warning", 3: "info", 4: "hint"}
 
@@ -105,10 +105,11 @@ def _is_target_uri(candidate_uri, target_path):
     ``os.path.abspath``, because Windows paths are case-insensitive and a
     real server is free to echo back a differently-cased drive letter or
     directory segment for the identical file, as this one did.
+
+    The comparison itself now lives in ``session.is_same_file_uri`` so the
+    project-readiness gate (``Session.await_project_ready``) matches pushed
+    diagnostics by exactly the same rule; this stays as the name the module
+    and its tests already use, and as the place the reasoning above is
+    recorded.
     """
-    if not candidate_uri:
-        return False
-    try:
-        return os.path.normcase(uri_to_path(candidate_uri)) == os.path.normcase(target_path)
-    except Exception:
-        return False
+    return is_same_file_uri(candidate_uri, target_path)

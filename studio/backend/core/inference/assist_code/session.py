@@ -28,6 +28,15 @@ _LANGUAGE_IDS = {
 # bundle or other generated file out of a single JSON-RPC payload.
 _MAX_DOCUMENT_BYTES = 5 * 1024 * 1024
 
+# How long a session will wait, ONCE, for the server's project graph to cover
+# the first document it opens. See Session.await_project_ready.
+#
+# Measured against typescript-language-server 5.9.3 on a two-file project, the
+# wait is ~0.6s. 10s is headroom for a large project without letting the gate
+# dominate a handler's 60s budget -- navigation requests themselves already
+# take up to 20s, and the gate is paid at most once per session.
+PROJECT_READY_TIMEOUT = 10.0
+
 
 class SessionStartFailed(Exception):
     """The server could not be spawned or did not complete the handshake."""
@@ -92,6 +101,30 @@ def uri_to_path(uri):
     return os.path.abspath(urllib.request.url2pathname(path))
 
 
+def is_same_file_uri(candidate_uri, target_path):
+    """Whether ``candidate_uri`` (as a server sent it) names ``target_path``.
+
+    Decodes and compares real paths rather than URI strings. A real server is
+    not guaranteed to echo back the URI string we sent it -- see
+    ``uri_to_path`` above: typescript-language-server percent-encodes the
+    Windows drive-letter colon, this module's ``path_to_uri`` does not -- so a
+    plain ``==`` between the two never matches against a real server.
+    ``normcase`` because Windows paths are case-insensitive and a server is
+    free to echo a differently-cased drive letter for the identical file.
+
+    Lives here rather than in diagnostics.py (which owned the original) so the
+    readiness gate below can share the one implementation: diagnostics.py
+    already imports from this module, so there is no cycle in this direction.
+    """
+    if not candidate_uri:
+        return False
+    try:
+        return os.path.normcase(uri_to_path(candidate_uri)) == os.path.normcase(
+            os.path.abspath(target_path))
+    except Exception:
+        return False
+
+
 class Session:
     def __init__(self, command, root, *, language):
         self.command = list(command)
@@ -99,6 +132,7 @@ class Session:
         self.language = language
         self.capabilities = {}
         self.opened_count = 0
+        self.project_ready = False
         self._opened = set()
         self._transport = None
         self._proc = None
@@ -254,6 +288,89 @@ class Session:
         }})
         self._opened.add(path)
         self.opened_count += 1
+
+    def await_project_ready(self, file_path, *, timeout = PROJECT_READY_TIMEOUT):
+        """Wait ONCE for the server's project graph to cover ``file_path``.
+
+        typescript-language-server answers ``initialize`` before tsserver has
+        finished loading the project graph, and it does not refuse requests
+        made in that window -- it ANSWERS them, from whatever it has loaded so
+        far. Measured on a two-file project: a ``textDocument/references``
+        issued immediately after ``didOpen`` returned only the declaration,
+        with the call site in the other file missing; the same request 0.8s
+        later returned both. The server was alive, no exception fired, and
+        nothing about the reply said it was partial.
+
+        That is a worse failure than an error, and it is the exact one
+        navigation.py's docstring exists to prevent. "No references found"
+        reads as "nothing calls this, safe to delete." An incomplete
+        references list reads the same way about every call site it omitted.
+        navigation.py already refuses to let ``LspClosed``/``LspError`` render
+        as a false-empty; an asynchronous project load reaches the same wrong
+        conclusion through a door that module did not have a guard on.
+
+        The signal used here is the server's own diagnostics for the document
+        just opened. That is not a coincidence of timing: a server cannot
+        report what is wrong with a file until it has resolved that file's
+        imports, which is exactly the project graph the cross-file queries
+        need. Measured on the same project, the push arrived at 0.77s and
+        references became complete at 0.97s -- the gate closes before the
+        window does.
+
+        Both diagnostics mechanisms are handled, chosen the same way
+        diagnostics.py chooses (from the handshake, not per language): a
+        push server is waited on for ``publishDiagnostics``, a pull server is
+        asked for ``textDocument/diagnostic`` and its answer discarded -- the
+        answer is worthless here, but the fact that it came at all proves the
+        project responds.
+
+        Deliberately NOT used: LSP work-done progress, which would be the
+        precise signal. Declaring ``window.workDoneProgress`` makes
+        typescript-language-server send ``window/workDoneProgress/create`` --
+        a server-to-CLIENT request. jsonrpc.Transport has no path for
+        answering one (its read loop files anything with a ``method`` as a
+        notification), and measured with the capability declared and the
+        request unanswered, the server then published no diagnostics at all
+        within 6s. Declaring it without implementing the reply path makes
+        this strictly worse, and implementing that path is a transport-level
+        change well beyond this fix.
+
+        Fail-open and bounded, both load-bearing. Every exception is
+        swallowed: this gate must never change what a caller's real request
+        reports. A dead transport discovered here is left for the actual
+        request to raise, so it still renders as the transport failure it is
+        rather than as something attributable to the gate. And
+        ``project_ready`` is set even when readiness was never observed, so a
+        server that never produces diagnostics pays this wait once per
+        session rather than on every call -- degrading to the old behaviour,
+        which is the documented preference over a hang.
+
+        Returns True if readiness was actually observed, False if the
+        deadline passed first. The return value is for tests; callers ignore
+        it, because there is nothing useful for them to do differently.
+        """
+        if self.project_ready:
+            return True
+        observed = False
+        try:
+            if self.supports("diagnosticProvider"):
+                self.request(
+                    "textDocument/diagnostic",
+                    {"textDocument": {"uri": path_to_uri(file_path)}},
+                    timeout = timeout,
+                )
+                observed = True
+            else:
+                note = self.wait_notification(
+                    "textDocument/publishDiagnostics",
+                    lambda p: is_same_file_uri(p.get("uri"), file_path),
+                    timeout = timeout,
+                )
+                observed = note is not None
+        except Exception:  # noqa: BLE001 - see "fail-open" above
+            observed = False
+        self.project_ready = True
+        return observed
 
     def request(self, method, params = None, timeout = 30.0):
         if self._transport is None:

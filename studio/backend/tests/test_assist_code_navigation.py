@@ -107,6 +107,13 @@ class TestReferencesError:
         navigation.py's module docstring."""
         s = sess.Session([sys.executable, FAKE, "refs_error"], str(tmp_path), language = "typescript")
         s.start(timeout = 10)
+        # This test is about error propagation, not cold-start readiness. The
+        # fake server in this mode implements one method and never publishes
+        # diagnostics, so the readiness gate would burn its full deadline
+        # waiting for a signal that is never coming. Marked ready explicitly
+        # rather than silently -- the gate's own behaviour is covered by
+        # TestProjectReadiness below and by the cold e2e test.
+        s.project_ready = True
         try:
             with pytest.raises(jsonrpc.LspError):
                 nav.references(s, str(ts_file), {"line": 0, "character": 6}, timeout = 10)
@@ -123,6 +130,7 @@ class TestDefinitionError:
         needs its own fake-server error mode and its own test."""
         s = sess.Session([sys.executable, FAKE, "def_error"], str(tmp_path), language = "typescript")
         s.start(timeout = 10)
+        s.project_ready = True   # see TestReferencesError: not a readiness test
         try:
             with pytest.raises(jsonrpc.LspError):
                 nav.definition(s, str(ts_file), {"line": 0, "character": 6}, timeout = 10)
@@ -135,6 +143,7 @@ class TestHoverError:
         """Same failure mode as TestReferencesError, for hover()."""
         s = sess.Session([sys.executable, FAKE, "hover_error"], str(tmp_path), language = "typescript")
         s.start(timeout = 10)
+        s.project_ready = True   # see TestReferencesError: not a readiness test
         try:
             with pytest.raises(jsonrpc.LspError):
                 nav.hover(s, str(ts_file), {"line": 0, "character": 6}, timeout = 10)
@@ -154,6 +163,70 @@ class TestSymbolsError:
                 nav.symbols(s, "alpha", timeout = 10)
         finally:
             s.close()
+
+
+class TestProjectReadiness:
+    """The cold-start gate (Session.await_project_ready).
+
+    A language server can answer ``initialize`` before its project graph is
+    loaded and then answer cross-file requests from what it has so far --
+    complete-looking, silently incomplete, no exception. These cover the
+    gate's contract; the e2e suite covers that it actually closes the window
+    against a real server.
+    """
+
+    def test_a_published_diagnostic_marks_the_project_ready(self, tmp_path, ts_file):
+        s = sess.Session([sys.executable, FAKE, "normal"], str(tmp_path), language = "typescript")
+        s.start(timeout = 10)
+        try:
+            assert s.project_ready is False
+            s.open_document(str(ts_file))
+            assert s.await_project_ready(str(ts_file), timeout = 10) is True
+            assert s.project_ready is True
+        finally:
+            s.close()
+
+    def test_a_pull_server_is_asked_instead_of_waited_on(self, tmp_path, ts_file):
+        """A server advertising diagnosticProvider may never push, so waiting
+        for a push would burn the whole deadline. It is asked directly; the
+        answer is discarded, but that it came proves the project responds."""
+        s = sess.Session([sys.executable, FAKE, "pull"], str(tmp_path), language = "typescript")
+        s.start(timeout = 10)
+        try:
+            assert s.supports("diagnosticProvider")
+            s.open_document(str(ts_file))
+            assert s.await_project_ready(str(ts_file), timeout = 10) is True
+        finally:
+            s.close()
+
+    def test_it_fails_open_when_readiness_never_arrives(self, tmp_path, ts_file):
+        """Bounded and fail-open: a server that never reports readiness must
+        degrade to the old behaviour, not hang. The gate returns False and
+        still marks the session ready, so the wait is paid once per session
+        rather than on every call."""
+        import time
+        s = sess.Session([sys.executable, FAKE, "wedged"], str(tmp_path), language = "typescript")
+        s.start(timeout = 10)
+        try:
+            started_at = time.monotonic()
+            assert s.await_project_ready(str(ts_file), timeout = 1.0) is False
+            elapsed = time.monotonic() - started_at
+            assert elapsed < 5.0, f"gate was not bounded: {elapsed:.1f}s"
+            assert s.project_ready is True
+            # Paid once: the second call must not wait again.
+            started_at = time.monotonic()
+            assert s.await_project_ready(str(ts_file), timeout = 1.0) is True
+            assert time.monotonic() - started_at < 0.2
+        finally:
+            s.close()
+
+    def test_a_dead_transport_is_left_for_the_real_request_to_report(self, tmp_path, ts_file):
+        """The gate must never change what a caller's real request reports.
+        A session that was never started raises LspClosed from request(); the
+        gate swallows that rather than surfacing it as its own failure."""
+        s = sess.Session([sys.executable, FAKE, "normal"], str(tmp_path), language = "typescript")
+        assert s.await_project_ready(str(ts_file), timeout = 1.0) is False
+        assert s.project_ready is True
 
 
 class TestHoverContentShapes:

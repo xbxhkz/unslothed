@@ -212,7 +212,7 @@ def _do_hover(arguments, session_id, budget):
 def _do_symbols(arguments, session_id, budget):
     """Workspace-wide symbol search.
 
-    ``open_document(resolved)`` is not optional here, and this was the one
+    Opening a document first is not optional here, and this was the one
     handler of the five that skipped it. ``workspace/symbol`` reads like a
     workspace-level request that needs no particular file, and the resolved
     path looks like it is only there to pick the workspace root -- which is
@@ -220,6 +220,8 @@ def _do_symbols(arguments, session_id, budget):
     a document is opened, so a ``workspace/symbol`` sent first thing after the
     handshake is rejected outright with ``No Project`` (plus a dozen lines of
     JavaScript stack trace, which is what ``execute``'s ``_short`` now caps).
+    Passing ``file_path`` to ``navigation.symbols`` is what opens it, and puts
+    this request behind the same readiness gate as the other three.
 
     That made ``code_symbols`` fail on the FIRST call of every session and
     succeed on every call after, because any other tool opens a document on
@@ -236,8 +238,8 @@ def _do_symbols(arguments, session_id, budget):
     with _session_for(arguments.get("path"), session_id, budget) as (session, resolved, err):
         if err:
             return err
-        session.open_document(resolved)
-        found = navigation.symbols(session, str(query).strip(), timeout = min(budget, 20.0))
+        found = navigation.symbols(
+            session, str(query).strip(), file_path = resolved, timeout = min(budget, 20.0))
         return _format_locations(found, session_id, f"No symbol matching {query!r} was found.")
 
 

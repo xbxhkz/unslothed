@@ -35,14 +35,19 @@ never does, and every fake-server test builds its fixtures with THIS
 module's own encoder -- so the round trip always matched itself and neither
 divergence ever showed up until a real server was in the loop.
 
-Two fixture-shaped findings, not implementation bugs, are worked around
-below rather than "fixed": (1) typescript-language-server answers
-``initialize`` before tsserver has finished loading the project graph, so a
-cross-file request made immediately after start can get a genuinely-answered
-but stale result (references that sees only the declaration file) rather
-than a timeout -- ``_warm_up_project`` polls a real request until the
-project is actually ready, the same way a real editor's "loading project"
-indicator does. (2) main.ts's original fixture used a named import
+One finding was originally mis-classified here as fixture-shaped and worked
+around rather than fixed, and the whole-branch review caught that:
+typescript-language-server answers ``initialize`` before tsserver has
+finished loading the project graph, so a cross-file request made immediately
+after start gets a genuinely-answered but INCOMPLETE result (references
+seeing only the declaration file) rather than a timeout. The fixture used to
+poll until the project was ready and every test then ran warm -- which meant
+the suite could not observe the defect, and production, which never warms up,
+kept shipping it. The readiness gate now lives in the product
+(``Session.await_project_ready``); the fixture helper is gone, and the tests
+below run genuinely cold on purpose.
+
+The remaining fixture-shaped finding is real: main.ts's original fixture used a named import
 (`import { addNumbers } from './lib'`), which put the literal text
 "addNumbers" in the file TWICE -- once in the import, once at the call
 site. Task 7's symbol-first addressing deliberately resolves a name to its
@@ -56,7 +61,6 @@ plain-text occurrence of the identifier, at the call site, which is what
 "symbol-first addressing, against a real server" actually needs to exercise.
 """
 import shutil
-import time
 
 import pytest
 
@@ -70,34 +74,6 @@ pytestmark = pytest.mark.skipif(
         "LSP handshake instead of here"
     ),
 )
-
-
-def _warm_up_project(session_id):
-    """Poll a real cross-file request until tsserver's project graph is
-    actually loaded, instead of asserting on whatever the first request
-    -- made the instant the LSP handshake completes -- happens to see.
-
-    Confirmed by hand against this exact server/fixture shape: the very
-    first ``references`` call after a cold start returned only the
-    declaration in lib.ts; a second call roughly 2s later, against the
-    SAME session, correctly included the call site in main.ts too. The
-    server was alive and answered both times -- this is not the
-    LspTimeout/LspClosed ambiguity diagnostics.py's docstring discusses,
-    it is tsserver's own project load finishing asynchronously after the
-    LSP handshake it is not otherwise gated on.
-    """
-    from core.inference import tools
-    deadline = time.monotonic() + 30.0
-    while time.monotonic() < deadline:
-        out = tools.execute_tool(
-            "code_references", {"path": "lib.ts", "symbol": "addNumbers"}, session_id = session_id)
-        if "main.ts" in out:
-            return
-        time.sleep(1.0)
-    # Not fatal here -- if the project never finishes loading in 30s
-    # something is genuinely wrong, and the individual test that runs next
-    # will fail with a real, informative assertion rather than this
-    # warm-up failing silently.
 
 
 @pytest.fixture
@@ -115,7 +91,12 @@ def ts_project(tmp_path, monkeypatch):
         "const wrong: number = lib.addNumbers(1, 'two')\n"
         "console.log(wrong)\n"
     )
-    _warm_up_project("e2e-warmup")
+    # Deliberately NO warm-up. The fixture used to poll a real cross-file
+    # request here until tsserver's project graph had loaded, which made
+    # every test below run against a warm session -- and so made the suite
+    # structurally unable to observe the cold-start defect the product now
+    # fixes (Session.await_project_ready). Warming up in the fixture put the
+    # remedy where only the tests benefited; production never warmed up.
     yield tmp_path
     from core.inference.assist_code import pool
     pool.shutdown_all()
@@ -148,10 +129,24 @@ def test_hover_reports_the_real_signature(ts_project):
     assert "addNumbers" in out and "number" in out, out
 
 
-def test_references_finds_the_call_site(ts_project):
+def test_references_finds_the_call_site_on_a_cold_session(ts_project):
+    """The FIRST references call against a cold server must be complete.
+
+    This is the test the fixture's warm-up used to disarm. Without the
+    product-side readiness gate, tsserver answers this request from a
+    half-loaded project graph: it returns the declaration in lib.ts and
+    silently omits the call site in main.ts. Nothing raises, and an empty or
+    short references list is exactly what "nothing calls this, safe to
+    delete" looks like.
+
+    ``pool.shutdown_all()`` makes the coldness explicit rather than relying
+    on this test happening to run first.
+    """
     from core.inference import tools
+    from core.inference.assist_code import pool
+    pool.shutdown_all()
     out = tools.execute_tool(
-        "code_references", {"path": "lib.ts", "symbol": "addNumbers"}, session_id = "e2e")
+        "code_references", {"path": "lib.ts", "symbol": "addNumbers"}, session_id = "e2e-cold")
     assert "main.ts" in out, out
 
 

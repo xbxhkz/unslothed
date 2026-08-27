@@ -30,6 +30,24 @@ from . import jsonrpc
 from .session import path_to_uri, uri_to_path
 
 
+def _open_ready(session, file_path):
+    """Open ``file_path`` and make sure the project graph actually covers it.
+
+    Every cross-file answer in this module depends on the server having
+    loaded the project, and a server that has not finished loading does not
+    say so -- it answers anyway, from what it has. See
+    ``Session.await_project_ready`` for the measurement and the reasoning.
+    The gate runs at most once per session and fails open, so the cost is a
+    fraction of a second on a session's first navigation call and nothing
+    afterwards.
+
+    ``open_document`` stays first: the readiness signal is the server's
+    diagnostics for THIS document, which ``didOpen`` is what triggers.
+    """
+    session.open_document(file_path)
+    session.await_project_ready(file_path)
+
+
 def _loc(item):
     location = item.get("location") or item
     uri = location.get("uri") or location.get("targetUri")
@@ -112,7 +130,7 @@ def definition(session, file_path, position, *, timeout = 30.0):
     propagate. See the module docstring for why an empty list must not stand
     in for any of those here.
     """
-    session.open_document(file_path)
+    _open_ready(session, file_path)
     try:
         result = session.request("textDocument/definition", {
             "textDocument": {"uri": path_to_uri(file_path)}, "position": position,
@@ -129,7 +147,7 @@ def references(session, file_path, position, *, timeout = 30.0):
     empty result here in particular reads as "nothing calls this," so a
     server failure must never be allowed to look like that answer.
     """
-    session.open_document(file_path)
+    _open_ready(session, file_path)
     try:
         result = session.request("textDocument/references", {
             "textDocument": {"uri": path_to_uri(file_path)}, "position": position,
@@ -236,7 +254,7 @@ def _hover_from_result(result):
 
 def hover(session, file_path, position, *, timeout = 30.0):
     """Plain-text hover info at ``position``. Same propagation rule as above."""
-    session.open_document(file_path)
+    _open_ready(session, file_path)
     try:
         result = session.request("textDocument/hover", {
             "textDocument": {"uri": path_to_uri(file_path)}, "position": position,
@@ -253,14 +271,28 @@ _SYMBOL_KINDS = {
 }
 
 
-def symbols(session, query, *, timeout = 30.0):
+def symbols(session, query, *, file_path = None, timeout = 30.0):
     """Workspace-wide symbol search by name (or substring, server-dependent).
 
     Same propagation rule as ``definition``/``references``: only a timeout
     folds into ``[]``. A genuinely empty match set (the server answered, and
     nothing matched) and a server that failed to answer at all must not look
     the same to the caller.
+
+    ``file_path`` names any file in the project. Passing it is what makes
+    this work as the FIRST call in a session: ``workspace/symbol`` reads like
+    a request that needs no particular file, but tsserver has no project at
+    all until a document is opened and rejects it outright with ``No
+    Project`` until then. Opening through ``_open_ready`` also puts this
+    request behind the same project-readiness gate as the other three, so a
+    cold session cannot answer it from a half-loaded graph either.
+
+    Optional, and defaulting to None, only so the fake-server unit tests can
+    drive this function without a real file on disk; every production caller
+    passes it.
     """
+    if file_path is not None:
+        _open_ready(session, file_path)
     try:
         result = session.request("workspace/symbol", {"query": query}, timeout = timeout)
     except jsonrpc.LspTimeout:
