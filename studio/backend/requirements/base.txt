@@ -12,10 +12,10 @@
 # these declared, both tools died with ModuleNotFoundError on any clean install
 # and only worked on dev boxes that happened to carry them from elsewhere.
 #
-# torchvision is deliberately UNPINNED: its version must match whatever torch
-# the install resolved (they ship as a matched pair), so a hard pin here would
-# fight the torch selection this file is applied after. pyproject.toml's
-# `huggingface` extra declares it the same bare way for the same reason.
-torchvision
+# Pinned to the torchvision that pairs with the pinned torch (2.10.0). A bare
+# name here resolves to whatever is newest at install time, which in a Docker
+# image rebuilt months later can pull a torchvision incompatible with torch --
+# surfacing as a CUDA error rather than a version mismatch.
+torchvision==0.25.0
 # detect_shapes uses torchvision's Mask R-CNN; webcam_look uses ultralytics YOLO.
 ultralytics==8.4.47
