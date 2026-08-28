@@ -3953,6 +3953,40 @@ async def _select_request_tools(
     else:
         # Copy so the shared module-global tool list can't be mutated by callers.
         tools = list(ALL_TOOLS)
+    # Re-added after the filter for exactly the reason search_conversation is below:
+    # Studio always sends an explicit enabled_tools array, built from a pill-driven
+    # literal in chat-adapter.ts that names only the upstream tools, so the filter
+    # above stripped every vision schema from every Studio chat request and the model
+    # could never call one. They have no pill of their own to be named by. De-duplicated
+    # so an omitted allowlist (which already means "all tools") doesn't offer them twice.
+    #
+    # `and tools` is load-bearing, not defensive. An EMPTY selection must stay empty:
+    # that is what lets the guard below skip the tool loop entirely, so the safetensors
+    # loop's "empty means allow all" semantic cannot reach built-ins the caller never
+    # opted into. Re-adding unconditionally made the catalogue never-empty and broke it.
+    # Reachable for real -- a chat with MCP on and every built-in pill off sends
+    # `enabled_tools: []`, and answering that by injecting five tools the user just
+    # switched off is wrong. It also keeps `enabled_tools` satisfiable for third-party
+    # /v1/chat/completions clients, for whom the array is a contract.
+    #
+    # This still fixes the reported bug: Studio's chat only sends the array at all when
+    # some pill is on, so a real chat request carries at least one upstream tool name,
+    # the filter admits it, and the vision schemas ride along. Note the search_conversation
+    # precedent below is gated on a condition too, and justified as read-only and
+    # always-safe -- which these are not: one drives a webcam, one makes deepfakes.
+    #
+    # Sub-project 2 adds the code-intelligence tools to the same re-add rather
+    # than a second hunk: one place to reason about, one merge conflict to
+    # resolve instead of two.
+    if tools_on and tools:
+        from core.inference.tools import ASSIST_VISION_TOOL_NAMES, ASSIST_CODE_TOOL_NAMES
+        _addable = ASSIST_VISION_TOOL_NAMES | ASSIST_CODE_TOOL_NAMES
+        _already = {t["function"]["name"] for t in tools}
+        tools = tools + [
+            t for t in ALL_TOOLS
+            if t["function"]["name"] in _addable
+            and t["function"]["name"] not in _already
+        ]
     # Drop the RAG tool without a scope: nothing to search over.
     if not payload.rag_scope:
         tools = [t for t in tools if t["function"]["name"] != "search_knowledge_base"]

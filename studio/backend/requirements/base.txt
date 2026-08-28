@@ -5,3 +5,17 @@
 # the shell installers install inline first.
 # Not diffusers: its pin must run after every other requirements file so a later
 # pass cannot replace it, so it lives in diffusers-pin.txt with its own late step.
+
+# Agent vision tools (detect_shapes, webcam_look). Torch-bound, so they belong
+# here rather than in studio.txt: this file is skipped entirely under NO_TORCH,
+# where a GGUF-only install has no torch for them to run on anyway. Without
+# these declared, both tools died with ModuleNotFoundError on any clean install
+# and only worked on dev boxes that happened to carry them from elsewhere.
+#
+# torchvision is deliberately UNPINNED: its version must match whatever torch
+# the install resolved (they ship as a matched pair), so a hard pin here would
+# fight the torch selection this file is applied after. pyproject.toml's
+# `huggingface` extra declares it the same bare way for the same reason.
+torchvision
+# detect_shapes uses torchvision's Mask R-CNN; webcam_look uses ultralytics YOLO.
+ultralytics==8.4.47
