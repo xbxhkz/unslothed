@@ -54,7 +54,7 @@ export const ar = {
   shell: {
     beta: "BETA",
     brand: "unsloth",
-    product: "Unsloth",
+    product: "Unslothed",
     accountMenu: "قائمة حساب {name}",
     updateAvailable: "يتوفر تحديث",
     resize: {
@@ -63,7 +63,7 @@ export const ar = {
       drag: "اسحب لتغيير الحجم",
     },
     aria: {
-      home: "الصفحة الرئيسية لـ Unsloth",
+      home: "الصفحة الرئيسية لـ Unslothed",
       closeSidebar: "إغلاق الشريط الجانبي",
       openSidebar: "فتح الشريط الجانبي",
       resizeSidebar: "تغيير حجم الشريط الجانبي أو طيه",
@@ -178,7 +178,7 @@ export const ar = {
     title: "الإعدادات",
     dialog: {
       title: "الإعدادات",
-      description: "إدارة تفضيلات Unsloth الخاصة بك.",
+      description: "إدارة تفضيلات Unslothed الخاصة بك.",
       closeAriaLabel: "إغلاق الإعدادات",
       searchPlaceholder: "ابحث في الإعدادات…",
       searchNoResults: "لم يُعثر على أي إعداد.",
@@ -327,7 +327,7 @@ export const ar = {
           "اسمح بالوصول إلى الميكروفون لعرض أسماء الأجهزة",
         allowMicrophone: "السماح بالميكروفون",
         micAccessBlocked:
-          "تم حظر الوصول إلى الميكروفون. اسمح بالوصول إلى الميكروفون لصفحة Unsloth هذه ثم أعد المحاولة.",
+          "تم حظر الوصول إلى الميكروفون. اسمح بالوصول إلى الميكروفون لصفحة Unslothed هذه ثم أعد المحاولة.",
         micAccessBlockedDesktop:
           "تم حظر الوصول إلى الميكروفون. أعد المحاولة واختر السماح، أو مكّن الميكروفون من إعدادات الخصوصية في النظام.",
         micAccessUnsupported:
@@ -420,7 +420,7 @@ export const ar = {
     },
     general: {
       title: "عام",
-      description: "التفضيلات العامة لـ Unsloth.",
+      description: "التفضيلات العامة لـ Unslothed.",
       account: "الحساب",
       huggingFaceToken: "رمز وصول Hugging Face",
       huggingFaceTokenDescription:
@@ -431,7 +431,7 @@ export const ar = {
       checkingToken: "جارٍ التحقق من رمز الوصول...",
       tokenValidated: "تم التحقق من الرمز",
       password: "كلمة المرور",
-      passwordDescription: "تغيير كلمة المرور لحساب Unsloth هذا.",
+      passwordDescription: "تغيير كلمة المرور لحساب Unslothed هذا.",
       passwordDialog: {
         trigger: "تغيير كلمة المرور",
         title: "تغيير كلمة المرور",
@@ -440,7 +440,7 @@ export const ar = {
         setTrigger: "تعيين كلمة مرور الوصول عن بُعد",
         setTitle: "تعيين كلمة مرور الوصول عن بُعد",
         setDescription:
-          "اختر كلمة المرور التي تسجّل بها المتصفحات البعيدة الدخول باسم unsloth (بحد أدنى {minLength} حرفًا). سيواصل تطبيق Unsloth لسطح المكتب تسجيل الدخول تلقائيًا.",
+          "اختر كلمة المرور التي تسجّل بها المتصفحات البعيدة الدخول باسم unsloth (بحد أدنى {minLength} حرفًا). سيواصل تطبيق Unslothed لسطح المكتب تسجيل الدخول تلقائيًا.",
         setSubmit: "تعيين كلمة المرور",
         setting: "جارٍ التعيين...",
         setDone: "تم تعيين كلمة المرور.",
@@ -540,13 +540,13 @@ export const ar = {
       },
       startup: {
         sectionTitle: "بدء التشغيل",
-        launchAtLogin: "تشغيل Unsloth عند تسجيل الدخول",
+        launchAtLogin: "تشغيل Unslothed عند تسجيل الدخول",
         launchAtLoginDescription:
-          "يبدأ Unsloth في الخلفية عند تسجيل الدخول، ويبقى في شريط القوائم أو علبة النظام حتى تفتحه.",
+          "يبدأ Unslothed في الخلفية عند تسجيل الدخول، ويبقى في شريط القوائم أو علبة النظام حتى تفتحه.",
 
         closeToTray: "الإغلاق إلى علبة النظام",
         closeToTrayDescription:
-          "إبقاء Unsloth وخادمه قيد التشغيل في الخلفية عند إغلاق النافذة الرئيسية.",
+          "إبقاء Unslothed وخادمه قيد التشغيل في الخلفية عند إغلاق النافذة الرئيسية.",
         closeToTraySaveError: "تعذّر تحديث إعداد الإغلاق إلى علبة النظام.",
         loadError: "تعذر تحميل إعداد التشغيل عند تسجيل الدخول.",
         saveError: "تعذر تحديث إعداد التشغيل عند تسجيل الدخول.",
@@ -588,22 +588,22 @@ export const ar = {
         action: "إعادة تعيين التفضيلات",
         confirmTitle: "إعادة تعيين جميع التفضيلات المحلية؟",
         confirmDescription:
-          "يمسح التفضيلات المحلية فقط ويعيد تحميل Unsloth. تُحفظ المحادثات ووصول API والإعدادات المخزّنة في قاعدة البيانات.",
+          "يمسح التفضيلات المحلية فقط ويعيد تحميل Unslothed. تُحفظ المحادثات ووصول API والإعدادات المخزّنة في قاعدة البيانات.",
         confirmAction: "إعادة التعيين وإعادة التحميل",
       },
       permissions: {
         sectionTitle: "الأذونات",
         bypassLabel: "أذونات الأدوات",
         bypassDescription:
-          "كيفية موافقة Unsloth على استدعاءات أدوات المحادثة (الطرفية، python، الويب، MCP) قبل تشغيلها. وضع «Full access» يعطّل الموافقات وصندوق عزل الشيفرة.",
+          "كيفية موافقة Unslothed على استدعاءات أدوات المحادثة (الطرفية، python، الويب، MCP) قبل تشغيلها. وضع «Full access» يعطّل الموافقات وصندوق عزل الشيفرة.",
       },
     },
     profile: {
       title: "الملف الشخصي",
-      description: "كيفية ظهور ملفك الشخصي في Unsloth.",
+      description: "كيفية ظهور ملفك الشخصي في Unslothed.",
       changePicture: "تغيير صورة الملف الشخصي",
       displayName: "الاسم المعروض",
-      nickname: "بماذا يجب أن يناديك Unsloth؟",
+      nickname: "بماذا يجب أن يناديك Unslothed؟",
       nicknamePlaceholder: "الاسم المفضّل",
       nicknameSaved: "تم حفظ الاسم المفضّل",
       avatarShape: "شكل صورة الملف الشخصي",
@@ -630,10 +630,10 @@ export const ar = {
       stats: {
         title: "إحصاءاتك",
         subtitle:
-          "كل ما يلي محسوب من سجلك الخاص. لا يُجمَع أي شيء ولا يُرسَل إلى Unsloth.",
+          "كل ما يلي محسوب من سجلك الخاص. لا يُجمَع أي شيء ولا يُرسَل إلى Unslothed.",
         retry: "إعادة المحاولة",
         privacyNote:
-          "تُحسب الإحصاءات من سجل المحادثات والتدريب المحفوظ في نسخة Unsloth لديك. لا يُجمَع أي شيء، ولا يُرسَل شيء إلى Unsloth أو إلى أي طرف ثالث.",
+          "تُحسب الإحصاءات من سجل المحادثات والتدريب المحفوظ في نسخة Unslothed لديك. لا يُجمَع أي شيء، ولا يُرسَل شيء إلى Unslothed أو إلى أي طرف ثالث.",
         emptyChats:
           "لا توجد محادثات بعد. ابدأ محادثة وستظهر إحصاءاتك هنا.",
         lifetimeTokens: "إجمالي التوكنات",
@@ -686,7 +686,7 @@ export const ar = {
     },
     appearance: {
       title: "المظهر",
-      description: "كيفية ظهور Unsloth على هذا الجهاز.",
+      description: "كيفية ظهور Unslothed على هذا الجهاز.",
       theme: {
         title: "السمة",
         label: "نظام الألوان",
@@ -697,7 +697,7 @@ export const ar = {
       },
       palette: {
         label: "لوحة الألوان",
-        description: "الألوان المستخدمة في Unsloth في الوضعين الفاتح والداكن.",
+        description: "الألوان المستخدمة في Unslothed في الوضعين الفاتح والداكن.",
         standard: "قياسية",
         classic: "كلاسيكية",
         minimal: "بسيطة",
@@ -755,7 +755,7 @@ export const ar = {
         },
         uiFontSize: {
           label: "حجم خط الواجهة",
-          description: "اضبط الحجم الأساسي المستخدم في واجهة Unsloth.",
+          description: "اضبط الحجم الأساسي المستخدم في واجهة Unslothed.",
         },
         codeFontSize: {
           label: "حجم خط الشيفرة",
@@ -785,7 +785,7 @@ export const ar = {
       language: {
         title: "اللغة",
         label: "لغة العرض",
-        description: "اللغة التي يستخدمها Unsloth.",
+        description: "اللغة التي يستخدمها Unslothed.",
         autoDetect: "اكتشاف تلقائي",
       },
       layout: {
@@ -812,7 +812,7 @@ export const ar = {
     },
     resources: {
       title: "النظام",
-      description: "راقب عتاد خادم Unsloth هذا ومساحة تخزينه.",
+      description: "راقب عتاد خادم Unslothed هذا ومساحة تخزينه.",
       liveUpdates: "التحديثات المباشرة",
       floatingWindow: "نافذة عائمة",
       disableOverlay: "تعطيل التراكب",
@@ -865,7 +865,7 @@ export const ar = {
           description: "استخدم إصدار llama-server الخاص بك.",
           hint: "اختر مجلد llama.cpp الذي يحتوي على llama-server، أو إصدارًا يوجد فيه ضمن build/bin. يُستخدم وقت التشغيل المخصّص لمحادثة GGUF والتضمينات ونماذج الصوت المدعومة. تبقى لمتغيرات البيئة الأولوية.",
           automatic: "تلقائي (مضمّن)",
-          bundled: "يستخدم وقت تشغيل llama.cpp الذي ثبّته Unsloth.",
+          bundled: "يستخدم وقت تشغيل llama.cpp الذي ثبّته Unslothed.",
           active: "سيُستخدم llama-server المخصّص عند تحميل النموذج التالي.",
           environmentManaged: "تديره متغير البيئة {variable}.",
           missingBinary: "لم يعد llama-server متاحًا في هذا المجلد. اختر مجلدًا آخر أو استخدم وقت التشغيل المضمّن.",
@@ -888,7 +888,7 @@ export const ar = {
         },
         unsupported: {
           notInstalled: "لم يُعثر على تثبيت llama.cpp مُدار، لذا لا توجد خلفية لتبديلها.",
-          localLink: "llama.cpp مجلد محلي ربطته بنفسك، ولن يستبدله Unsloth.",
+          localLink: "llama.cpp مجلد محلي ربطته بنفسك، ولن يستبدله Unslothed.",
           sourceBuild: "بُني هذا الإصدار من llama.cpp من الشيفرة المصدرية، لذا لا يمكن تبديل خلفيته من هنا.",
           customPath: "تم تحديد مجلد llama.cpp مخصّص. يحدد هذا الإصدار خلفية الحوسبة.",
           unresolved: "تعذّر التحقق من الخلفيات المتاحة. تحقّق من اتصالك وحاول مرة أخرى.",
@@ -957,7 +957,7 @@ export const ar = {
       description:
         "اربط وكلاء البرمجة مثل Claude Code وCodex بنموذج محلي باستخدام unsloth start.",
       intro:
-        "يربط Claude Code وCodex وHermes وOpenClaw وOpenCode وغيرها من الوكلاء بنموذج يقدّمه Unsloth محليًا، دون اتصال بالإنترنت تمامًا. يشغّل خادمًا متوافقًا مع OpenAI ولا يمسّ ملفات إعدادات وكيلك إطلاقًا.",
+        "يربط Claude Code وCodex وHermes وOpenClaw وOpenCode وغيرها من الوكلاء بنموذج يقدّمه Unslothed محليًا، دون اتصال بالإنترنت تمامًا. يشغّل خادمًا متوافقًا مع OpenAI ولا يمسّ ملفات إعدادات وكيلك إطلاقًا.",
       readDocs: "قراءة التوثيق",
       copy: "نسخ",
       copied: "تم النسخ",
@@ -980,11 +980,11 @@ export const ar = {
       agentDocs: "فتح توثيق إعداد {agent}",
       copyGeneratedCommand: "نسخ الأمر المُنشأ",
       modelNote:
-        "يتطلب Codex نموذج GGUF يقدّمه llama-server. أما الوكلاء الآخرون فيمكنهم استخدام النماذج المبنية على transformers أيضًا؛ احذف ‎--model لاستخدام النموذج المُحمَّل بالفعل في Unsloth.",
+        "يتطلب Codex نموذج GGUF يقدّمه llama-server. أما الوكلاء الآخرون فيمكنهم استخدام النماذج المبنية على transformers أيضًا؛ احذف ‎--model لاستخدام النموذج المُحمَّل بالفعل في Unslothed.",
       subagent: {
         title: "استخدام نموذج محلي كوكيل فرعي",
         description:
-          "أبقِ {agent} على نموذجه الحالي وفوّض مهام محددة إلى نموذج Unsloth المحلي هذا.",
+          "أبقِ {agent} على نموذجه الحالي وفوّض مهام محددة إلى نموذج Unslothed المحلي هذا.",
         setupCommand: "أمر الإعداد",
         copySetupCommand: "نسخ أمر إعداد الوكيل الفرعي",
         usagePrompt: "ثم اكتب في {agent}:",
@@ -1014,7 +1014,7 @@ export const ar = {
       options: {
         title: "الخيارات الشائعة",
         description:
-          "تُحلَّل رايات Unsloth أولًا؛ وأي شيء لا يتعرّف عليه يُمرَّر كما هو إلى الوكيل.",
+          "تُحلَّل رايات Unslothed أولًا؛ وأي شيء لا يتعرّف عليه يُمرَّر كما هو إلى الوكيل.",
         model:
           "يختار نموذجًا. بدون ‎--model يستخدم unsloth start النموذج المُحمَّل حاليًا في Studio، ويُظهر خطأ إن لم يكن هناك أي نموذج محمَّل.",
         contextLength:
@@ -1025,10 +1025,10 @@ export const ar = {
           "يفعّل أو يعطّل التوازي التنسوري عبر عدة أجهزة GPU.",
         serve: "يفعّل أو يعطّل الخادم المحلي التلقائي.",
         launch: "يشغّل الوكيل، أو يكتفي بطباعة الأمر والبيئة.",
-        persist: "يحتفظ بمساحة تخزين الوكيل التي يديرها Unsloth بين عمليات التشغيل.",
+        persist: "يحتفظ بمساحة تخزين الوكيل التي يديرها Unslothed بين عمليات التشغيل.",
         asSubagent:
-          "يبقي الوكيل الأصلي على نموذجه الحالي ويسجّل Unsloth كوكيل فرعي محلي (Claude Code وCodex وOpenCode).",
-        apiKey: "يمرّر مفتاح API الخاص بـ Unsloth (أو اضبط UNSLOTH_API_KEY).",
+          "يبقي الوكيل الأصلي على نموذجه الحالي ويسجّل Unslothed كوكيل فرعي محلي (Claude Code وCodex وOpenCode).",
+        apiKey: "يمرّر مفتاح API الخاص بـ Unslothed (أو اضبط UNSLOTH_API_KEY).",
         yolo: "يتخطى طلبات الموافقة. استخدمه في البيئات الموثوقة فقط.",
       },
       remote: {
@@ -1039,7 +1039,7 @@ export const ar = {
       passthrough: {
         title: "تمرير وسائط إلى الوكيل",
         description:
-          "الوسائط التي تأتي بعد رايات Unsloth تُمرَّر إلى الوكيل نفسه، لذا تظل أوامره الأصلية مثل resume تعمل:",
+          "الوسائط التي تأتي بعد رايات Unslothed تُمرَّر إلى الوكيل نفسه، لذا تظل أوامره الأصلية مثل resume تعمل:",
       },
       dryRun: {
         title: "المعاينة دون تشغيل",
@@ -1229,7 +1229,7 @@ export const ar = {
     },
     apiKeys: {
       title: "API",
-      description: "الوصول إلى Unsloth عبر واجهة API المتوافقة مع OpenAI.",
+      description: "الوصول إلى Unslothed عبر واجهة API المتوافقة مع OpenAI.",
       readDocs: "قراءة وثائق API",
       noAccess: "لا يوجد وصول إلى API بعد.",
       accessTokens: "توكنات الوصول",
@@ -1257,7 +1257,7 @@ export const ar = {
       osWindows: "Windows",
       secureHttps: "HTTPS آمن",
       secureHttpsHint:
-        "لا يزال المنفذ على العنوان 0.0.0.0 متاحًا عالميًا. للحصول على أمان كامل، شغّل Unsloth باستخدام --secure لإتاحة رابط HTTPS هذا فقط.",
+        "لا يزال المنفذ على العنوان 0.0.0.0 متاحًا عالميًا. للحصول على أمان كامل، شغّل Unslothed باستخدام --secure لإتاحة رابط HTTPS هذا فقط.",
       copyTunnelUrl: "نسخ رابط النفق",
       copySnippet: "نسخ المقتطف",
       copy: "نسخ",
@@ -1290,7 +1290,7 @@ export const ar = {
     about: {
       title: "حول",
       description: "الوثائق وملاحظات الإصدار والآراء ومعلومات النسخة.",
-      studioVersion: "إصدار Unsloth",
+      studioVersion: "إصدار Unslothed",
       packageVersion: "إصدار الحزمة",
       desktopAppVersion: "إصدار تطبيق سطح المكتب",
       desktopAppVersionUnavailable: "غير متاح",
@@ -1309,7 +1309,7 @@ export const ar = {
       reportIssue: "الإبلاغ عن مشكلة",
       license: {
         sectionTitle: "الترخيص",
-        studioLabel: "Unsloth",
+        studioLabel: "Unslothed",
         studioLicense: "AGPL-3.0",
         studioDescription: "مفتوح المصدر بموجب GNU AGPL v3.0.",
         libraryLabel: "Unsloth Core",
@@ -1317,19 +1317,19 @@ export const ar = {
         libraryDescription: "مرخّص بموجب Apache 2.0.",
       },
       dangerZone: "منطقة الخطر",
-      shutDownStudio: "إيقاف تشغيل Unsloth",
+      shutDownStudio: "إيقاف تشغيل Unslothed",
       shutDownStudioDescription:
-        "يوقف خادم Unsloth وينهي جلستك.",
+        "يوقف خادم Unslothed وينهي جلستك.",
       shutDown: "إيقاف التشغيل",
       update: {
-        title: "تحديث Unsloth",
+        title: "تحديث Unslothed",
         commandText: "نص {label}",
         copied: "تم النسخ",
         copyCommand: "نسخ الأمر",
         commandCopied: "تم نسخ {label}",
         copyNamedCommand: "نسخ {label}",
-        checkingInstall: "جارٍ التحقق من طريقة تثبيت Unsloth...",
-        installIntro: "لتثبيت أو تحديث Unsloth:",
+        checkingInstall: "جارٍ التحقق من طريقة تثبيت Unslothed...",
+        installIntro: "لتثبيت أو تحديث Unslothed:",
         localUpdateHeading: "تحديث محلي",
         installCommandUnix: "أمر التثبيت على macOS أو Linux",
         installCommandWindows: "أمر التثبيت على Windows",
@@ -1343,7 +1343,7 @@ export const ar = {
           "تم اكتشاف تثبيت من المصدر أو حزمة VCS. أعد التثبيت من المسار المحلي الأصلي أو رابط Git.",
         repoCheckoutFallback:
           "إذا كانت لا تزال لديك نسخة المستودع، شغّل المثبّت المحلي منها:",
-        restartAfterUpdate: "أعد تشغيل Unsloth بعد التحديث.",
+        restartAfterUpdate: "أعد تشغيل Unslothed بعد التحديث.",
         desktopManaged:
           "يتحقق تطبيق سطح المكتب تلقائيًا من توفر إصدارات جديدة. ويمكنك أيضًا التحقق من وجود تحديثات أو تثبيتها هنا في أي وقت.",
         desktopReady: "تحديثات تطبيق سطح المكتب",
@@ -1361,7 +1361,7 @@ export const ar = {
         desktopCheckFailed: "تعذّر التحقق من وجود تحديثات",
         desktopCheckFailedDescription: "تحقق من اتصالك ثم حاول مرة أخرى.",
         desktopCurrent: "تطبيق سطح المكتب محدّث",
-        desktopCurrentDescription: "سيواصل Unsloth التحقق تلقائيًا.",
+        desktopCurrentDescription: "سيواصل Unslothed التحقق تلقائيًا.",
         checkForUpdates: "التحقق من وجود تحديثات",
         checkAgain: "التحقق مرة أخرى",
         retryCheck: "إعادة المحاولة",
@@ -1369,7 +1369,7 @@ export const ar = {
         updateNow: "التحديث الآن",
         openReleasePage: "فتح صفحة الإصدار",
         unknownInstall:
-          "تعذّر اكتشاف طريقة تثبيت Unsloth. لعمليات تثبيت المثبّت أو PyPI، استخدم الأوامر أعلاه.",
+          "تعذّر اكتشاف طريقة تثبيت Unslothed. لعمليات تثبيت المثبّت أو PyPI، استخدم الأوامر أعلاه.",
         localCheckout:
           "لعمليات تثبيت النسخة المحلية، شغّل المثبّت المحلي من تلك النسخة:",
         docs: "وثائق التثبيت:",
@@ -1870,7 +1870,7 @@ export const ar = {
       },
       startFailed: "فشل بدء التدريب",
       startUnconfirmed:
-        "تعذّر على Unsloth تأكيد بدء التدريب. جارٍ التحقق من الحالة في الخلفية.",
+        "تعذّر على Unslothed تأكيد بدء التدريب. جارٍ التحقق من الحالة في الخلفية.",
       stopFailed: "فشل إيقاف التدريب",
       trainingStillActiveTitle: "لا يزال التدريب نشطًا",
       stopBeforeConfig: "أوقف التدريب أولًا، ثم عُد إلى التكوين.",
@@ -2061,7 +2061,7 @@ export const ar = {
       preparing: "جارٍ التحضير",
       left: "{eta} متبقٍ",
       downloaded: "تم تنزيل {size}",
-      terminalStart: "> يبدأ تدريب Unsloth...",
+      terminalStart: "> يبدأ تدريب Unslothed...",
       preparingResources: "> جارٍ تحضير النموذج ومجموعة البيانات...",
       gettingReady: "> نُجهّز كل شيء لعملية التدريب...",
       waitingForFirstStep: "> {message} | في انتظار الخطوة الأولى... ({step})",

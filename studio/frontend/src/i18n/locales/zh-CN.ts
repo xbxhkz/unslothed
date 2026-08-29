@@ -52,7 +52,7 @@ export const zhCN = {
   shell: {
     beta: "BETA",
     brand: "unsloth",
-    product: "Unsloth",
+    product: "Unslothed",
     accountMenu: "{name} 账号菜单",
     updateAvailable: "有可用更新",
     resize: {
@@ -61,7 +61,7 @@ export const zhCN = {
       drag: "拖动调整大小",
     },
     aria: {
-      home: "Unsloth 首页",
+      home: "Unslothed 首页",
       closeSidebar: "关闭侧边栏",
       openSidebar: "打开侧边栏",
       resizeSidebar: "调整或折叠侧边栏",
@@ -176,7 +176,7 @@ export const zhCN = {
     title: "设置",
     dialog: {
       title: "设置",
-      description: "管理你的 Unsloth 偏好设置。",
+      description: "管理你的 Unslothed 偏好设置。",
       closeAriaLabel: "关闭设置",
       searchPlaceholder: "搜索设置…",
       searchNoResults: "未找到设置。",
@@ -324,7 +324,7 @@ export const zhCN = {
         microphoneGrantDescription: "允许访问麦克风后即可显示设备名称",
         allowMicrophone: "允许使用麦克风",
         micAccessBlocked:
-          "麦克风访问已被阻止。请在浏览器中允许此 Unsloth 页面使用麦克风，然后重试。",
+          "麦克风访问已被阻止。请在浏览器中允许此 Unslothed 页面使用麦克风，然后重试。",
         micAccessBlockedDesktop:
           "麦克风访问已被阻止。请重试并选择允许，或在系统隐私设置中启用麦克风。",
         micAccessUnsupported: "此浏览器或环境不支持访问麦克风。",
@@ -412,7 +412,7 @@ export const zhCN = {
     },
     general: {
       title: "通用",
-      description: "Unsloth 的全局偏好设置。",
+      description: "Unslothed 的全局偏好设置。",
       account: "账号",
       huggingFaceToken: "Hugging Face token",
       huggingFaceTokenDescription: "用于加载受限模型和推送产物。",
@@ -422,7 +422,7 @@ export const zhCN = {
       checkingToken: "正在检查 token...",
       tokenValidated: "Token 已验证",
       password: "密码",
-      passwordDescription: "更改此 Unsloth 账号的密码。",
+      passwordDescription: "更改此 Unslothed 账号的密码。",
       passwordDialog: {
         trigger: "更改密码",
         title: "更改密码",
@@ -430,7 +430,7 @@ export const zhCN = {
         setTrigger: "设置远程密码",
         setTitle: "设置远程密码",
         setDescription:
-          "选择远程浏览器以 unsloth 身份登录时使用的密码（至少 {minLength} 个字符）。Unsloth 桌面应用仍会自动登录。",
+          "选择远程浏览器以 unsloth 身份登录时使用的密码（至少 {minLength} 个字符）。Unslothed 桌面应用仍会自动登录。",
         setSubmit: "设置密码",
         setting: "正在设置...",
         setDone: "密码已设置。",
@@ -523,13 +523,13 @@ export const zhCN = {
       },
       startup: {
         sectionTitle: "启动",
-        launchAtLogin: "登录时运行 Unsloth",
+        launchAtLogin: "登录时运行 Unslothed",
         launchAtLoginDescription:
-          "登录系统时在后台启动 Unsloth。在你打开它之前，它会一直驻留在菜单栏或系统托盘中。",
+          "登录系统时在后台启动 Unslothed。在你打开它之前，它会一直驻留在菜单栏或系统托盘中。",
 
         closeToTray: "关闭到系统托盘",
         closeToTrayDescription:
-          "关闭主窗口时，让 Unsloth 及其服务器继续在后台运行。",
+          "关闭主窗口时，让 Unslothed 及其服务器继续在后台运行。",
         closeToTraySaveError: "无法更新关闭到系统托盘设置。",
         loadError: "无法加载登录时启动设置。",
         saveError: "无法更新登录时启动设置。",
@@ -572,22 +572,22 @@ export const zhCN = {
         action: "重置偏好设置",
         confirmTitle: "重置所有本地偏好设置？",
         confirmDescription:
-          "这会清除仅保存在本地的偏好设置，然后重新加载 Unsloth。聊天、API 访问权限和数据库中的设置不会受到影响。",
+          "这会清除仅保存在本地的偏好设置，然后重新加载 Unslothed。聊天、API 访问权限和数据库中的设置不会受到影响。",
         confirmAction: "重置并重新加载",
       },
       permissions: {
         sectionTitle: "权限",
         bypassLabel: "工具权限",
         bypassDescription:
-          "设置 Unsloth 执行聊天中的工具调用（终端、python、网页、MCP）前的审批方式。“Full access”会关闭审批和代码沙箱。",
+          "设置 Unslothed 执行聊天中的工具调用（终端、python、网页、MCP）前的审批方式。“Full access”会关闭审批和代码沙箱。",
       },
     },
     profile: {
       title: "个人资料",
-      description: "你的个人资料在 Unsloth 中的显示方式。",
+      description: "你的个人资料在 Unslothed 中的显示方式。",
       changePicture: "更换头像",
       displayName: "显示名称",
-      nickname: "Unsloth 应该怎么称呼你？",
+      nickname: "Unslothed 应该怎么称呼你？",
       nicknamePlaceholder: "昵称",
       nicknameSaved: "称呼已保存",
       avatarShape: "头像形状",
@@ -614,10 +614,10 @@ export const zhCN = {
       stats: {
         title: "你的统计",
         subtitle:
-          "下面的内容全部根据你自己的历史记录统计。不会收集任何数据，也不会发送给 Unsloth。",
+          "下面的内容全部根据你自己的历史记录统计。不会收集任何数据，也不会发送给 Unslothed。",
         retry: "重试",
         privacyNote:
-          "统计数据由你本地 Unsloth 保存的聊天和训练历史计算得出。不收集任何数据，也不会发送给 Unsloth 或任何第三方。",
+          "统计数据由你本地 Unslothed 保存的聊天和训练历史计算得出。不收集任何数据，也不会发送给 Unslothed 或任何第三方。",
         emptyChats: "暂无聊天。开始一段对话后，这里就会显示你的统计数据。",
         lifetimeTokens: "累计 token",
         peakTokens: "单日峰值",
@@ -669,11 +669,11 @@ export const zhCN = {
     },
     appearance: {
       title: "外观",
-      description: "调整 Unsloth 在此设备上的显示方式。",
+      description: "调整 Unslothed 在此设备上的显示方式。",
       language: {
         title: "语言",
         label: "显示语言",
-        description: "选择 Unsloth 使用的语言。",
+        description: "选择 Unslothed 使用的语言。",
         autoDetect: "自动检测",
       },
       theme: {
@@ -686,7 +686,7 @@ export const zhCN = {
       },
       palette: {
         label: "调色板",
-        description: "Unsloth 全局使用的配色，支持浅色和深色模式。",
+        description: "Unslothed 全局使用的配色，支持浅色和深色模式。",
         standard: "标准",
         classic: "经典",
         minimal: "极简",
@@ -742,7 +742,7 @@ export const zhCN = {
         },
         uiFontSize: {
           label: "界面字号",
-          description: "调整 Unsloth 界面的基准字号。",
+          description: "调整 Unslothed 界面的基准字号。",
         },
         codeFontSize: {
           label: "代码字号",
@@ -791,7 +791,7 @@ export const zhCN = {
     },
     resources: {
       title: "系统",
-      description: "监控此 Unsloth 服务器的硬件和存储。",
+      description: "监控此 Unslothed 服务器的硬件和存储。",
       liveUpdates: "实时更新",
       floatingWindow: "悬浮窗口",
       disableOverlay: "禁用悬浮层",
@@ -844,7 +844,7 @@ export const zhCN = {
           description: "使用你自己的 llama-server 构建。",
           hint: "选择包含 llama-server 的 llama.cpp 文件夹，或 llama-server 位于 build/bin 下的构建。自定义运行时用于 GGUF 聊天、嵌入和受支持的语音模型。环境变量仍然优先。",
           automatic: "自动（内置）",
-          bundled: "使用 Unsloth 安装的 llama.cpp 运行时。",
+          bundled: "使用 Unslothed 安装的 llama.cpp 运行时。",
           active: "下次加载模型时将使用你的自定义 llama-server。",
           environmentManaged: "由 {variable} 环境变量管理。",
           missingBinary: "此文件夹中的 llama-server 已不可用。请选择其他文件夹或使用内置运行时。",
@@ -867,7 +867,7 @@ export const zhCN = {
         },
         unsupported: {
           notInstalled: "未找到受管理的 llama.cpp 安装，因此没有可切换的后端。",
-          localLink: "llama.cpp 是你自己链接的本地目录，Unsloth 不会替换它。",
+          localLink: "llama.cpp 是你自己链接的本地目录，Unslothed 不会替换它。",
           sourceBuild: "此 llama.cpp 由源码编译，无法在这里切换后端。",
           customPath: "已选择自定义 llama.cpp 文件夹。其构建决定计算后端。",
           unresolved: "无法检查可用的后端。请检查网络连接后重试。",
@@ -936,7 +936,7 @@ export const zhCN = {
       description:
         "使用 unsloth start 将 Claude Code、Codex 等编程智能体连接到本地模型。",
       intro:
-        "可将 Claude Code、Codex、Hermes、OpenClaw、OpenCode 等智能体连接到由 Unsloth 在本地提供服务的模型，全程离线。它会启动一个兼容 OpenAI 的服务器，并且从不改动智能体的配置文件。",
+        "可将 Claude Code、Codex、Hermes、OpenClaw、OpenCode 等智能体连接到由 Unslothed 在本地提供服务的模型，全程离线。它会启动一个兼容 OpenAI 的服务器，并且从不改动智能体的配置文件。",
       readDocs: "查看文档",
       copy: "复制",
       copied: "已复制",
@@ -958,11 +958,11 @@ export const zhCN = {
       agentDocs: "打开 {agent} 的配置文档",
       copyGeneratedCommand: "复制生成的命令",
       modelNote:
-        "Codex 需要通过 llama-server 提供服务的 GGUF 模型。其他智能体也可以使用基于 transformers 的模型；去掉 --model 即可使用 Unsloth 中已加载的模型。",
+        "Codex 需要通过 llama-server 提供服务的 GGUF 模型。其他智能体也可以使用基于 transformers 的模型；去掉 --model 即可使用 Unslothed 中已加载的模型。",
       subagent: {
         title: "将本地模型用作子智能体",
         description:
-          "让 {agent} 保持当前模型，并把选定的任务委派给这个本地 Unsloth 模型。",
+          "让 {agent} 保持当前模型，并把选定的任务委派给这个本地 Unslothed 模型。",
         setupCommand: "配置命令",
         copySetupCommand: "复制子智能体配置命令",
         usagePrompt: "然后在 {agent} 中输入：",
@@ -992,7 +992,7 @@ export const zhCN = {
       options: {
         title: "常用选项",
         description:
-          "Unsloth 的参数会先被解析；无法识别的参数会原样传给智能体。",
+          "Unslothed 的参数会先被解析；无法识别的参数会原样传给智能体。",
         model:
           "选择模型。不带 --model 时，unsloth start 会使用 Studio 中当前加载的模型；若没有已加载的模型则报错。",
         contextLength: "设置请求的上下文长度（别名：--max-seq-length）。",
@@ -1001,10 +1001,10 @@ export const zhCN = {
         tensorParallel: "开启或关闭多 GPU 张量并行。",
         serve: "启用或禁用自动启动的本地服务器。",
         launch: "启动智能体，或仅打印命令和环境变量。",
-        persist: "在多次运行之间保留由 Unsloth 管理的智能体存储。",
+        persist: "在多次运行之间保留由 Unslothed 管理的智能体存储。",
         asSubagent:
-          "让父智能体保持当前模型，并将 Unsloth 注册为本地子智能体（Claude Code、Codex 和 OpenCode）。",
-        apiKey: "提供你的 Unsloth API 密钥（或设置 UNSLOTH_API_KEY）。",
+          "让父智能体保持当前模型，并将 Unslothed 注册为本地子智能体（Claude Code、Codex 和 OpenCode）。",
+        apiKey: "提供你的 Unslothed API 密钥（或设置 UNSLOTH_API_KEY）。",
         yolo: "跳过确认提示。请仅在可信环境中使用。",
       },
       remote: {
@@ -1015,7 +1015,7 @@ export const zhCN = {
       passthrough: {
         title: "向智能体传递参数",
         description:
-          "Unsloth 参数之后的参数会转发给智能体本身，因此 resume 之类的原生命令仍然可用：",
+          "Unslothed 参数之后的参数会转发给智能体本身，因此 resume 之类的原生命令仍然可用：",
       },
       dryRun: {
         title: "仅预览，不启动",
@@ -1196,7 +1196,7 @@ export const zhCN = {
     },
     apiKeys: {
       title: "API",
-      description: "通过兼容 OpenAI 的 API 以编程方式访问 Unsloth。",
+      description: "通过兼容 OpenAI 的 API 以编程方式访问 Unslothed。",
       readDocs: "阅读 API 文档",
       noAccess: "还没有 API 访问权限。",
       accessTokens: "访问 token",
@@ -1224,7 +1224,7 @@ export const zhCN = {
       osWindows: "Windows",
       secureHttps: "安全 HTTPS",
       secureHttpsHint:
-        "0.0.0.0 端口仍可被全网访问。如需完全安全，请使用 --secure 启动 Unsloth，仅暴露此 HTTPS 链接。",
+        "0.0.0.0 端口仍可被全网访问。如需完全安全，请使用 --secure 启动 Unslothed，仅暴露此 HTTPS 链接。",
       copyTunnelUrl: "复制隧道链接",
       copySnippet: "复制代码片段",
       copy: "复制",
@@ -1256,8 +1256,8 @@ export const zhCN = {
     },
     about: {
       title: "关于",
-      description: "文档、发布说明、反馈和 Unsloth 构建信息。",
-      studioVersion: "Unsloth 版本",
+      description: "文档、发布说明、反馈和 Unslothed 构建信息。",
+      studioVersion: "Unslothed 版本",
       packageVersion: "包版本",
       desktopAppVersion: "桌面应用版本",
       desktopAppVersionUnavailable: "不可用",
@@ -1276,7 +1276,7 @@ export const zhCN = {
       reportIssue: "报告问题",
       license: {
         sectionTitle: "许可证",
-        studioLabel: "Unsloth",
+        studioLabel: "Unslothed",
         studioLicense: "AGPL-3.0",
         studioDescription: "基于 GNU AGPL v3.0 开源。",
         libraryLabel: "Unsloth Core",
@@ -1284,18 +1284,18 @@ export const zhCN = {
         libraryDescription: "采用 Apache 2.0 许可证。",
       },
       dangerZone: "危险区域",
-      shutDownStudio: "关闭 Unsloth",
-      shutDownStudioDescription: "停止 Unsloth 服务进程并结束你的会话。",
+      shutDownStudio: "关闭 Unslothed",
+      shutDownStudioDescription: "停止 Unslothed 服务进程并结束你的会话。",
       shutDown: "关闭",
       update: {
-        title: "更新 Unsloth",
+        title: "更新 Unslothed",
         commandText: "{label}内容",
         copied: "已复制",
         copyCommand: "复制命令",
         commandCopied: "{label}已复制",
         copyNamedCommand: "复制{label}",
-        checkingInstall: "正在检查 Unsloth 的安装方式...",
-        installIntro: "安装或更新 Unsloth：",
+        checkingInstall: "正在检查 Unslothed 的安装方式...",
+        installIntro: "安装或更新 Unslothed：",
         localUpdateHeading: "本地更新",
         installCommandUnix: "macOS/Linux 安装命令",
         installCommandWindows: "Windows 安装命令",
@@ -1308,7 +1308,7 @@ export const zhCN = {
           "这看起来是源码或 VCS 包安装。请从最初使用的本地路径或 Git URL 重新安装。",
         repoCheckoutFallback:
           "如果仍保留仓库的代码检出目录，请在该目录中运行本地安装器：",
-        restartAfterUpdate: "更新后请重启 Unsloth。",
+        restartAfterUpdate: "更新后请重启 Unslothed。",
         desktopManaged:
           "桌面应用会自动检查新版本。你也可以随时在此检查或更新。",
         desktopReady: "桌面应用更新",
@@ -1323,7 +1323,7 @@ export const zhCN = {
         desktopCheckFailed: "无法检查更新",
         desktopCheckFailedDescription: "请检查网络连接后重试。",
         desktopCurrent: "桌面应用已是最新版本",
-        desktopCurrentDescription: "Unsloth 会继续自动检查更新。",
+        desktopCurrentDescription: "Unslothed 会继续自动检查更新。",
         checkForUpdates: "检查更新",
         checkAgain: "再次检查",
         retryCheck: "重试",
@@ -1331,7 +1331,7 @@ export const zhCN = {
         updateNow: "立即更新",
         openReleasePage: "打开发布页面",
         unknownInstall:
-          "Unsloth 无法检测安装方式。如果你使用一键安装器或 PyPI 安装，请使用上面的命令。",
+          "Unslothed 无法检测安装方式。如果你使用一键安装器或 PyPI 安装，请使用上面的命令。",
         localCheckout:
           "对于本地代码检出目录安装，请改为在该目录中运行本地安装器：",
         docs: "安装文档：",
@@ -1771,7 +1771,7 @@ export const zhCN = {
       loadingModel: "正在加载模型...",
       checkingDataset: "正在检查数据集...",
       startFailed: "启动训练失败",
-      startUnconfirmed: "Unsloth 无法确认训练是否已开始。正在后台检查状态。",
+      startUnconfirmed: "Unslothed 无法确认训练是否已开始。正在后台检查状态。",
       stopFailed: "停止训练失败",
       trainingStillActiveTitle: "训练仍在进行",
       stopBeforeConfig: "请先停止训练，然后返回配置页面。",
@@ -1986,7 +1986,7 @@ export const zhCN = {
       preparing: "准备中",
       left: "剩余 {eta}",
       downloaded: "已下载 {size}",
-      terminalStart: "> Unsloth 训练开始...",
+      terminalStart: "> Unslothed 训练开始...",
       preparingResources: "> 正在准备模型和数据集...",
       gettingReady: "> 正在为本次运行做好准备...",
       waitingForFirstStep: "> {message} | 正在等待首个训练步...（{step}）",

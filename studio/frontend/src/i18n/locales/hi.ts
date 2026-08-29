@@ -57,7 +57,7 @@ export const hi = {
   shell: {
     beta: "BETA",
     brand: "unsloth",
-    product: "Unsloth",
+    product: "Unslothed",
     accountMenu: "{name} का खाता मेनू",
     updateAvailable: "अपडेट उपलब्ध है",
     resize: {
@@ -66,7 +66,7 @@ export const hi = {
       drag: "आकार बदलने के लिए खींचें",
     },
     aria: {
-      home: "Unsloth होम",
+      home: "Unslothed होम",
       closeSidebar: "साइडबार बंद करें",
       openSidebar: "साइडबार खोलें",
       resizeSidebar: "साइडबार का आकार बदलें या छोटा करें",
@@ -181,7 +181,7 @@ export const hi = {
     title: "सेटिंग्स",
     dialog: {
       title: "सेटिंग्स",
-      description: "अपनी Unsloth प्राथमिकताएँ प्रबंधित करें।",
+      description: "अपनी Unslothed प्राथमिकताएँ प्रबंधित करें।",
       closeAriaLabel: "सेटिंग्स बंद करें",
       searchPlaceholder: "सेटिंग्स खोजें…",
       searchNoResults: "कोई सेटिंग नहीं मिली।",
@@ -330,7 +330,7 @@ export const hi = {
           "डिवाइस के नाम दिखाने के लिए माइक्रोफ़ोन की अनुमति दें",
         allowMicrophone: "माइक्रोफ़ोन की अनुमति दें",
         micAccessBlocked:
-          "माइक्रोफ़ोन एक्सेस रोक दिया गया है। इस Unsloth पेज के लिए माइक्रोफ़ोन एक्सेस की अनुमति दें, फिर दोबारा कोशिश करें।",
+          "माइक्रोफ़ोन एक्सेस रोक दिया गया है। इस Unslothed पेज के लिए माइक्रोफ़ोन एक्सेस की अनुमति दें, फिर दोबारा कोशिश करें।",
         micAccessBlockedDesktop:
           "माइक्रोफ़ोन एक्सेस रोक दिया गया है। दोबारा कोशिश करें और अनुमति दें चुनें, या सिस्टम की प्राइवेसी सेटिंग में माइक्रोफ़ोन चालू करें।",
         micAccessUnsupported:
@@ -425,7 +425,7 @@ export const hi = {
     },
     general: {
       title: "सामान्य",
-      description: "Unsloth के लिए वैश्विक प्राथमिकताएं।",
+      description: "Unslothed के लिए वैश्विक प्राथमिकताएं।",
       account: "खाता",
       huggingFaceToken: "Hugging Face टोकन",
       huggingFaceTokenDescription:
@@ -436,7 +436,7 @@ export const hi = {
       checkingToken: "टोकन की जाँच हो रही है...",
       tokenValidated: "टोकन सत्यापित है",
       password: "पासवर्ड",
-      passwordDescription: "इस Unsloth खाते के लिए पासवर्ड बदलें।",
+      passwordDescription: "इस Unslothed खाते के लिए पासवर्ड बदलें।",
       passwordDialog: {
         trigger: "पासवर्ड बदलें",
         title: "पासवर्ड बदलें",
@@ -445,7 +445,7 @@ export const hi = {
         setTrigger: "रिमोट पासवर्ड सेट करें",
         setTitle: "रिमोट पासवर्ड सेट करें",
         setDescription:
-          "वह पासवर्ड चुनें जिससे रिमोट ब्राउज़र unsloth के रूप में साइन इन करते हैं (कम से कम {minLength} अक्षर)। Unsloth डेस्कटॉप ऐप स्वतः साइन इन करता रहेगा।",
+          "वह पासवर्ड चुनें जिससे रिमोट ब्राउज़र unsloth के रूप में साइन इन करते हैं (कम से कम {minLength} अक्षर)। Unslothed डेस्कटॉप ऐप स्वतः साइन इन करता रहेगा।",
         setSubmit: "पासवर्ड सेट करें",
         setting: "सेट हो रहा है...",
         setDone: "पासवर्ड सेट हो गया।",
@@ -543,13 +543,13 @@ export const hi = {
       },
       startup: {
         sectionTitle: "स्टार्टअप",
-        launchAtLogin: "लॉगिन पर Unsloth चलाएं",
+        launchAtLogin: "लॉगिन पर Unslothed चलाएं",
         launchAtLoginDescription:
-          "लॉगिन करने पर Unsloth को बैकग्राउंड में शुरू करता है। इसे खोलने तक यह मेनू बार या सिस्टम ट्रे में रहता है।",
+          "लॉगिन करने पर Unslothed को बैकग्राउंड में शुरू करता है। इसे खोलने तक यह मेनू बार या सिस्टम ट्रे में रहता है।",
 
         closeToTray: "सिस्टम ट्रे में बंद करें",
         closeToTrayDescription:
-          "मुख्य विंडो बंद करने पर Unsloth और उसके सर्वर को बैकग्राउंड में चलते रहने दें।",
+          "मुख्य विंडो बंद करने पर Unslothed और उसके सर्वर को बैकग्राउंड में चलते रहने दें।",
         closeToTraySaveError: "सिस्टम ट्रे में बंद करने की सेटिंग अपडेट नहीं हो सकी।",
         loadError: "लॉगिन पर चलाने की सेटिंग लोड नहीं हो सकी।",
         saveError: "लॉगिन पर चलाने की सेटिंग अपडेट नहीं हो सकी।",
@@ -591,22 +591,22 @@ export const hi = {
         action: "प्राथमिकताएं रीसेट करें",
         confirmTitle: "सभी स्थानीय प्राथमिकताएं रीसेट करें?",
         confirmDescription:
-          "केवल-स्थानीय प्राथमिकताएं साफ़ करता है और Unsloth को फिर से लोड करता है। चैट, API एक्सेस, और DB-समर्थित सेटिंग्स बनी रहती हैं।",
+          "केवल-स्थानीय प्राथमिकताएं साफ़ करता है और Unslothed को फिर से लोड करता है। चैट, API एक्सेस, और DB-समर्थित सेटिंग्स बनी रहती हैं।",
         confirmAction: "रीसेट करें और फिर से लोड करें",
       },
       permissions: {
         sectionTitle: "अनुमतियां",
         bypassLabel: "टूल अनुमतियां",
         bypassDescription:
-          "चैट के टूल कॉल (टर्मिनल, python, वेब, MCP) चलाने से पहले Unsloth उन्हें कैसे मंज़ूरी देता है। “Full access” मोड से मंज़ूरी और कोड सैंडबॉक्स बंद हो जाते हैं।",
+          "चैट के टूल कॉल (टर्मिनल, python, वेब, MCP) चलाने से पहले Unslothed उन्हें कैसे मंज़ूरी देता है। “Full access” मोड से मंज़ूरी और कोड सैंडबॉक्स बंद हो जाते हैं।",
       },
     },
     profile: {
       title: "प्रोफ़ाइल",
-      description: "Unsloth में आपकी प्रोफ़ाइल कैसे दिखती है।",
+      description: "Unslothed में आपकी प्रोफ़ाइल कैसे दिखती है।",
       changePicture: "प्रोफ़ाइल चित्र बदलें",
       displayName: "प्रदर्शन नाम",
-      nickname: "Unsloth आपको क्या कहकर बुलाए?",
+      nickname: "Unslothed आपको क्या कहकर बुलाए?",
       nicknamePlaceholder: "उपनाम",
       nicknameSaved: "पसंदीदा नाम सहेजा गया",
       avatarShape: "प्रोफ़ाइल चित्र की आकृति",
@@ -633,10 +633,10 @@ export const hi = {
       stats: {
         title: "आपके आँकड़े",
         subtitle:
-          "नीचे सब कुछ आपके अपने इतिहास से गिना जाता है। कुछ भी इकट्ठा नहीं किया जाता और न ही Unsloth को भेजा जाता है।",
+          "नीचे सब कुछ आपके अपने इतिहास से गिना जाता है। कुछ भी इकट्ठा नहीं किया जाता और न ही Unslothed को भेजा जाता है।",
         retry: "फिर कोशिश करें",
         privacyNote:
-          "आँकड़े आपके Unsloth इंस्टॉल में मौजूद चैट और ट्रेनिंग इतिहास से गिने जाते हैं। कुछ भी इकट्ठा नहीं किया जाता, और Unsloth या किसी तीसरे पक्ष को कुछ नहीं भेजा जाता।",
+          "आँकड़े आपके Unslothed इंस्टॉल में मौजूद चैट और ट्रेनिंग इतिहास से गिने जाते हैं। कुछ भी इकट्ठा नहीं किया जाता, और Unslothed या किसी तीसरे पक्ष को कुछ नहीं भेजा जाता।",
         emptyChats:
           "अभी तक कोई चैट नहीं। बातचीत शुरू करें और आपके आँकड़े यहाँ दिखने लगेंगे।",
         lifetimeTokens: "अब तक के कुल टोकन",
@@ -689,7 +689,7 @@ export const hi = {
     },
     appearance: {
       title: "रूप-रंग",
-      description: "इस डिवाइस पर Unsloth कैसा दिखता है।",
+      description: "इस डिवाइस पर Unslothed कैसा दिखता है।",
       theme: {
         title: "थीम",
         label: "रंग योजना",
@@ -700,7 +700,7 @@ export const hi = {
       },
       palette: {
         label: "रंग पैलेट",
-        description: "लाइट और डार्क मोड में पूरे Unsloth में दिखने वाले रंग।",
+        description: "लाइट और डार्क मोड में पूरे Unslothed में दिखने वाले रंग।",
         standard: "मानक",
         classic: "क्लासिक",
         minimal: "मिनिमल",
@@ -758,7 +758,7 @@ export const hi = {
         },
         uiFontSize: {
           label: "UI फ़ॉन्ट का आकार",
-          description: "Unsloth UI के लिए उपयोग होने वाला आधार आकार समायोजित करें।",
+          description: "Unslothed UI के लिए उपयोग होने वाला आधार आकार समायोजित करें।",
         },
         codeFontSize: {
           label: "कोड फ़ॉन्ट का आकार",
@@ -788,7 +788,7 @@ export const hi = {
       language: {
         title: "भाषा",
         label: "प्रदर्शन भाषा",
-        description: "Unsloth द्वारा उपयोग की जाने वाली भाषा।",
+        description: "Unslothed द्वारा उपयोग की जाने वाली भाषा।",
         autoDetect: "स्वतः पहचान",
       },
       layout: {
@@ -815,7 +815,7 @@ export const hi = {
     },
     resources: {
       title: "सिस्टम",
-      description: "इस Unsloth सर्वर के हार्डवेयर और स्टोरेज की निगरानी करें।",
+      description: "इस Unslothed सर्वर के हार्डवेयर और स्टोरेज की निगरानी करें।",
       liveUpdates: "लाइव अपडेट",
       floatingWindow: "फ्लोटिंग विंडो",
       disableOverlay: "ओवरले अक्षम करें",
@@ -868,7 +868,7 @@ export const hi = {
           description: "अपना llama-server बिल्ड इस्तेमाल करें।",
           hint: "वह llama.cpp फ़ोल्डर चुनें जिसमें llama-server हो, या ऐसा बिल्ड जहाँ यह build/bin में हो। कस्टम रनटाइम GGUF चैट, एम्बेडिंग और समर्थित वॉइस मॉडल के लिए इस्तेमाल होता है। पर्यावरण चर को फिर भी प्राथमिकता मिलती है।",
           automatic: "स्वचालित (बंडल किया हुआ)",
-          bundled: "Unsloth द्वारा इंस्टॉल किया गया llama.cpp रनटाइम इस्तेमाल करता है।",
+          bundled: "Unslothed द्वारा इंस्टॉल किया गया llama.cpp रनटाइम इस्तेमाल करता है।",
           active: "अगली बार मॉडल लोड होने पर आपका कस्टम llama-server इस्तेमाल होगा।",
           environmentManaged: "{variable} पर्यावरण चर द्वारा प्रबंधित।",
           missingBinary: "इस फ़ोल्डर में llama-server अब उपलब्ध नहीं है। दूसरा फ़ोल्डर चुनें या बंडल रनटाइम इस्तेमाल करें।",
@@ -891,7 +891,7 @@ export const hi = {
         },
         unsupported: {
           notInstalled: "कोई प्रबंधित llama.cpp इंस्टॉल नहीं मिला, इसलिए बदलने के लिए कोई बैकएंड नहीं है।",
-          localLink: "llama.cpp आपकी अपनी लिंक की हुई लोकल डायरेक्टरी है, इसलिए Unsloth उसे नहीं बदलेगा।",
+          localLink: "llama.cpp आपकी अपनी लिंक की हुई लोकल डायरेक्टरी है, इसलिए Unslothed उसे नहीं बदलेगा।",
           sourceBuild: "यह llama.cpp सोर्स से बनाया गया है, इसलिए इसका बैकएंड यहाँ से नहीं बदला जा सकता।",
           customPath: "एक कस्टम llama.cpp फ़ोल्डर चुना गया है। उसका बिल्ड कंप्यूट बैकएंड तय करता है।",
           unresolved: "उपलब्ध बैकएंड की जाँच नहीं हो सकी। अपना कनेक्शन देखकर दोबारा कोशिश करें।",
@@ -960,7 +960,7 @@ export const hi = {
       description:
         "unsloth start की मदद से Claude Code और Codex जैसे कोडिंग एजेंट को लोकल मॉडल से जोड़ें।",
       intro:
-        "Claude Code, Codex, Hermes, OpenClaw, OpenCode और दूसरे एजेंट को Unsloth द्वारा लोकली सर्व किए गए मॉडल से जोड़ता है, पूरी तरह ऑफ़लाइन। यह एक OpenAI-संगत सर्वर चलाता है और आपके एजेंट की कॉन्फ़िगरेशन फ़ाइलों को कभी नहीं छूता।",
+        "Claude Code, Codex, Hermes, OpenClaw, OpenCode और दूसरे एजेंट को Unslothed द्वारा लोकली सर्व किए गए मॉडल से जोड़ता है, पूरी तरह ऑफ़लाइन। यह एक OpenAI-संगत सर्वर चलाता है और आपके एजेंट की कॉन्फ़िगरेशन फ़ाइलों को कभी नहीं छूता।",
       readDocs: "दस्तावेज़ पढ़ें",
       copy: "कॉपी करें",
       copied: "कॉपी किया गया",
@@ -983,11 +983,11 @@ export const hi = {
       agentDocs: "{agent} के सेटअप दस्तावेज़ खोलें",
       copyGeneratedCommand: "बनाया गया कमांड कॉपी करें",
       modelNote:
-        "Codex को llama-server द्वारा सर्व किया गया GGUF मॉडल चाहिए। दूसरे एजेंट Transformers-आधारित मॉडल भी उपयोग कर सकते हैं; Unsloth में पहले से लोड किए गए मॉडल का उपयोग करने के लिए --model हटा दें।",
+        "Codex को llama-server द्वारा सर्व किया गया GGUF मॉडल चाहिए। दूसरे एजेंट Transformers-आधारित मॉडल भी उपयोग कर सकते हैं; Unslothed में पहले से लोड किए गए मॉडल का उपयोग करने के लिए --model हटा दें।",
       subagent: {
         title: "लोकल मॉडल को सबएजेंट के रूप में उपयोग करें",
         description:
-          "{agent} को उसके मौजूदा मॉडल पर ही रहने दें और चुने हुए काम इस लोकल Unsloth मॉडल को सौंपें।",
+          "{agent} को उसके मौजूदा मॉडल पर ही रहने दें और चुने हुए काम इस लोकल Unslothed मॉडल को सौंपें।",
         setupCommand: "सेटअप कमांड",
         copySetupCommand: "सबएजेंट सेटअप कमांड कॉपी करें",
         usagePrompt: "फिर {agent} में यह टाइप करें:",
@@ -1017,7 +1017,7 @@ export const hi = {
       options: {
         title: "सामान्य विकल्प",
         description:
-          "Unsloth के फ़्लैग पहले पढ़े जाते हैं; जो पहचान में नहीं आता वह सीधे एजेंट को भेज दिया जाता है।",
+          "Unslothed के फ़्लैग पहले पढ़े जाते हैं; जो पहचान में नहीं आता वह सीधे एजेंट को भेज दिया जाता है।",
         model:
           "मॉडल चुनता है। --model न देने पर unsloth start वही मॉडल उपयोग करता है जो Studio में लोड है, और कोई लोड न हो तो त्रुटि देता है।",
         contextLength:
@@ -1029,11 +1029,11 @@ export const hi = {
         serve: "अपने आप चलने वाला लोकल सर्वर चालू या बंद करता है।",
         launch: "एजेंट चलाता है, या सिर्फ़ कमांड और एनवायरनमेंट दिखाता है।",
         persist:
-          "Unsloth द्वारा प्रबंधित एजेंट स्टोरेज को रनों के बीच बनाए रखता है।",
+          "Unslothed द्वारा प्रबंधित एजेंट स्टोरेज को रनों के बीच बनाए रखता है।",
         asSubagent:
-          "मूल एजेंट को उसके मौजूदा मॉडल पर रखता है और Unsloth को लोकल सबएजेंट के रूप में दर्ज करता है (Claude Code, Codex और OpenCode)।",
+          "मूल एजेंट को उसके मौजूदा मॉडल पर रखता है और Unslothed को लोकल सबएजेंट के रूप में दर्ज करता है (Claude Code, Codex और OpenCode)।",
         apiKey:
-          "आपकी Unsloth API key लेता है (या UNSLOTH_API_KEY सेट करें)।",
+          "आपकी Unslothed API key लेता है (या UNSLOTH_API_KEY सेट करें)।",
         yolo:
           "मंज़ूरी के प्रॉम्प्ट छोड़ देता है। केवल भरोसेमंद वातावरण में उपयोग करें।",
       },
@@ -1045,7 +1045,7 @@ export const hi = {
       passthrough: {
         title: "एजेंट को आर्ग्युमेंट भेजना",
         description:
-          "Unsloth के फ़्लैग के बाद दिए गए आर्ग्युमेंट सीधे एजेंट को भेजे जाते हैं, इसलिए resume जैसे एजेंट के अपने कमांड काम करते रहते हैं:",
+          "Unslothed के फ़्लैग के बाद दिए गए आर्ग्युमेंट सीधे एजेंट को भेजे जाते हैं, इसलिए resume जैसे एजेंट के अपने कमांड काम करते रहते हैं:",
       },
       dryRun: {
         title: "चलाए बिना देखें",
@@ -1235,7 +1235,7 @@ export const hi = {
     },
     apiKeys: {
       title: "API",
-      description: "OpenAI-संगत API के माध्यम से Unsloth तक पहुंचें।",
+      description: "OpenAI-संगत API के माध्यम से Unslothed तक पहुंचें।",
       readDocs: "API दस्तावेज़ पढ़ें",
       noAccess: "अभी तक कोई API एक्सेस नहीं।",
       accessTokens: "एक्सेस टोकन",
@@ -1263,7 +1263,7 @@ export const hi = {
       osWindows: "Windows",
       secureHttps: "सुरक्षित HTTPS",
       secureHttpsHint:
-        "0.0.0.0 वाला पोर्ट अब भी विश्व स्तर पर पहुँचा जा सकता है। पूरी सुरक्षा के लिए Unsloth को --secure के साथ शुरू करें, ताकि केवल यह HTTPS लिंक उपलब्ध हो।",
+        "0.0.0.0 वाला पोर्ट अब भी विश्व स्तर पर पहुँचा जा सकता है। पूरी सुरक्षा के लिए Unslothed को --secure के साथ शुरू करें, ताकि केवल यह HTTPS लिंक उपलब्ध हो।",
       copyTunnelUrl: "टनल URL कॉपी करें",
       copySnippet: "स्निपेट कॉपी करें",
       copy: "कॉपी करें",
@@ -1296,7 +1296,7 @@ export const hi = {
     about: {
       title: "परिचय",
       description: "दस्तावेज़, रिलीज़ नोट्स, प्रतिक्रिया, और बिल्ड जानकारी।",
-      studioVersion: "Unsloth संस्करण",
+      studioVersion: "Unslothed संस्करण",
       packageVersion: "पैकेज संस्करण",
       desktopAppVersion: "डेस्कटॉप ऐप संस्करण",
       desktopAppVersionUnavailable: "उपलब्ध नहीं",
@@ -1315,7 +1315,7 @@ export const hi = {
       reportIssue: "समस्या रिपोर्ट करें",
       license: {
         sectionTitle: "लाइसेंस",
-        studioLabel: "Unsloth",
+        studioLabel: "Unslothed",
         studioLicense: "AGPL-3.0",
         studioDescription: "GNU AGPL v3.0 के तहत ओपन सोर्स।",
         libraryLabel: "Unsloth Core",
@@ -1323,19 +1323,19 @@ export const hi = {
         libraryDescription: "Apache 2.0 के तहत लाइसेंस प्राप्त।",
       },
       dangerZone: "खतरनाक क्षेत्र",
-      shutDownStudio: "Unsloth शट डाउन करें",
+      shutDownStudio: "Unslothed शट डाउन करें",
       shutDownStudioDescription:
-        "Unsloth सर्वर को रोकता है और आपके सत्र को समाप्त करता है।",
+        "Unslothed सर्वर को रोकता है और आपके सत्र को समाप्त करता है।",
       shutDown: "शट डाउन करें",
       update: {
-        title: "Unsloth अपडेट करें",
+        title: "Unslothed अपडेट करें",
         commandText: "{label} का टेक्स्ट",
         copied: "कॉपी किया गया",
         copyCommand: "कमांड कॉपी करें",
         commandCopied: "{label} कॉपी किया गया",
         copyNamedCommand: "{label} कॉपी करें",
-        checkingInstall: "जांच रहे हैं कि Unsloth कैसे इंस्टॉल किया गया था...",
-        installIntro: "Unsloth इंस्टॉल या अपडेट करने के लिए:",
+        checkingInstall: "जांच रहे हैं कि Unslothed कैसे इंस्टॉल किया गया था...",
+        installIntro: "Unslothed इंस्टॉल या अपडेट करने के लिए:",
         localUpdateHeading: "स्थानीय अपडेट",
         installCommandUnix: "macOS/Linux इंस्टॉल कमांड",
         installCommandWindows: "Windows इंस्टॉल कमांड",
@@ -1349,7 +1349,7 @@ export const hi = {
           "सोर्स या VCS पैकेज इंस्टॉल का पता चला। मूल स्थानीय पथ या Git URL से पुनः इंस्टॉल करें।",
         repoCheckoutFallback:
           "यदि आपके पास अभी भी रेपो checkout है, तो उससे स्थानीय इंस्टॉलर चलाएं:",
-        restartAfterUpdate: "अपडेट करने के बाद Unsloth को पुनः आरंभ करें।",
+        restartAfterUpdate: "अपडेट करने के बाद Unslothed को पुनः आरंभ करें।",
         desktopManaged:
           "डेस्कटॉप ऐप नए ऐप संस्करणों की अपने-आप जाँच करता है। आप यहाँ कभी भी अपडेट की जाँच कर सकते हैं या अपडेट कर सकते हैं।",
         desktopReady: "डेस्कटॉप ऐप अपडेट",
@@ -1369,7 +1369,7 @@ export const hi = {
         desktopCheckFailedDescription:
           "अपना कनेक्शन जाँचें और फिर से कोशिश करें।",
         desktopCurrent: "डेस्कटॉप ऐप नवीनतम संस्करण पर है",
-        desktopCurrentDescription: "Unsloth अपने-आप जाँच करता रहेगा।",
+        desktopCurrentDescription: "Unslothed अपने-आप जाँच करता रहेगा।",
         checkForUpdates: "अपडेट की जाँच करें",
         checkAgain: "फिर से जाँचें",
         retryCheck: "फिर से कोशिश करें",
@@ -1377,7 +1377,7 @@ export const hi = {
         updateNow: "अभी अपडेट करें",
         openReleasePage: "रिलीज़ पेज खोलें",
         unknownInstall:
-          "यह पता नहीं लगाया जा सका कि Unsloth कैसे इंस्टॉल किया गया था। इंस्टॉलर या PyPI इंस्टॉल के लिए, ऊपर दिए गए कमांड का उपयोग करें।",
+          "यह पता नहीं लगाया जा सका कि Unslothed कैसे इंस्टॉल किया गया था। इंस्टॉलर या PyPI इंस्टॉल के लिए, ऊपर दिए गए कमांड का उपयोग करें।",
         localCheckout:
           "स्थानीय checkout इंस्टॉल के लिए, उस checkout से स्थानीय इंस्टॉलर चलाएं:",
         docs: "इंस्टॉल दस्तावेज़:",
@@ -1877,7 +1877,7 @@ export const hi = {
       },
       startFailed: "ट्रेनिंग शुरू करने में विफल",
       startUnconfirmed:
-        "Unsloth यह पुष्टि नहीं कर सका कि ट्रेनिंग शुरू हुई या नहीं। बैकग्राउंड में स्थिति जांची जा रही है।",
+        "Unslothed यह पुष्टि नहीं कर सका कि ट्रेनिंग शुरू हुई या नहीं। बैकग्राउंड में स्थिति जांची जा रही है।",
       stopFailed: "ट्रेनिंग रोकने में विफल",
       trainingStillActiveTitle: "ट्रेनिंग अभी भी सक्रिय है",
       stopBeforeConfig: "पहले ट्रेनिंग रोकें, फिर कॉन्फ़िगरेशन पर लौटें।",

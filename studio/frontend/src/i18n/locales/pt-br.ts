@@ -56,7 +56,7 @@ export const ptBR = {
   shell: {
     beta: "BETA",
     brand: "unsloth",
-    product: "Unsloth",
+    product: "Unslothed",
     accountMenu: "Menu da conta de {name}",
     updateAvailable: "Atualização disponível",
     resize: {
@@ -65,7 +65,7 @@ export const ptBR = {
       drag: "Arraste para redimensionar",
     },
     aria: {
-      home: "Início do Unsloth",
+      home: "Início do Unslothed",
       closeSidebar: "Fechar barra lateral",
       openSidebar: "Abrir barra lateral",
       resizeSidebar: "Redimensionar ou recolher a barra lateral",
@@ -180,7 +180,7 @@ export const ptBR = {
     title: "Configurações",
     dialog: {
       title: "Configurações",
-      description: "Gerencie suas preferências do Unsloth.",
+      description: "Gerencie suas preferências do Unslothed.",
       closeAriaLabel: "Fechar configurações",
       searchPlaceholder: "Pesquisar configurações…",
       searchNoResults: "Nenhuma configuração encontrada.",
@@ -331,7 +331,7 @@ export const ptBR = {
           "Permita o acesso ao microfone para ver os nomes dos dispositivos",
         allowMicrophone: "Permitir acesso ao microfone",
         micAccessBlocked:
-          "O acesso ao microfone foi bloqueado. Permita o acesso ao microfone nesta página do Unsloth e tente novamente.",
+          "O acesso ao microfone foi bloqueado. Permita o acesso ao microfone nesta página do Unslothed e tente novamente.",
         micAccessBlockedDesktop:
           "O acesso ao microfone foi bloqueado. Tente novamente e escolha Permitir, ou ative o microfone nas configurações de privacidade do sistema.",
         micAccessUnsupported:
@@ -426,7 +426,7 @@ export const ptBR = {
     },
     general: {
       title: "Geral",
-      description: "Preferências globais do Unsloth.",
+      description: "Preferências globais do Unslothed.",
       account: "Conta",
       huggingFaceToken: "Token do Hugging Face",
       huggingFaceTokenDescription:
@@ -437,7 +437,7 @@ export const ptBR = {
       clearToken: "Limpar",
       checkingToken: "Verificando token...",
       password: "Senha",
-      passwordDescription: "Altere a senha desta conta do Unsloth.",
+      passwordDescription: "Altere a senha desta conta do Unslothed.",
       passwordDialog: {
         trigger: "Alterar senha",
         title: "Alterar senha",
@@ -446,7 +446,7 @@ export const ptBR = {
         setTrigger: "Definir senha remota",
         setTitle: "Definir senha remota",
         setDescription:
-          "Escolha a senha que os navegadores remotos usam para entrar como unsloth (no mínimo {minLength} caracteres). O aplicativo de desktop da Unsloth continua entrando automaticamente.",
+          "Escolha a senha que os navegadores remotos usam para entrar como unsloth (no mínimo {minLength} caracteres). O aplicativo de desktop da Unslothed continua entrando automaticamente.",
         setSubmit: "Definir senha",
         setting: "Definindo...",
         setDone: "Senha definida.",
@@ -545,13 +545,13 @@ export const ptBR = {
       },
       startup: {
         sectionTitle: "Inicialização",
-        launchAtLogin: "Executar o Unsloth ao fazer login",
+        launchAtLogin: "Executar o Unslothed ao fazer login",
         launchAtLoginDescription:
-          "Inicia o Unsloth em segundo plano quando você faz login. Ele permanece na barra de menus ou na bandeja do sistema até você abri-lo.",
+          "Inicia o Unslothed em segundo plano quando você faz login. Ele permanece na barra de menus ou na bandeja do sistema até você abri-lo.",
 
         closeToTray: "Fechar para a bandeja do sistema",
         closeToTrayDescription:
-          "Mantém o Unsloth e seu servidor em execução em segundo plano ao fechar a janela principal.",
+          "Mantém o Unslothed e seu servidor em execução em segundo plano ao fechar a janela principal.",
         closeToTraySaveError:
           "Não foi possível atualizar a configuração de fechar para a bandeja do sistema.",
         loadError:
@@ -598,22 +598,22 @@ export const ptBR = {
         action: "Redefinir preferências",
         confirmTitle: "Redefinir todas as preferências locais?",
         confirmDescription:
-          "Limpa as preferências locais e recarrega o Unsloth. Chats, acesso à API e configurações salvas no banco de dados são mantidos.",
+          "Limpa as preferências locais e recarrega o Unslothed. Chats, acesso à API e configurações salvas no banco de dados são mantidos.",
         confirmAction: "Redefinir e recarregar",
       },
       permissions: {
         sectionTitle: "Permissões",
         bypassLabel: "Permissões de ferramentas",
         bypassDescription:
-          "Como o Unsloth aprova as chamadas de ferramentas do chat (terminal, python, web, MCP) antes de executá-las. O modo “Full access” desativa as aprovações e o sandbox de código.",
+          "Como o Unslothed aprova as chamadas de ferramentas do chat (terminal, python, web, MCP) antes de executá-las. O modo “Full access” desativa as aprovações e o sandbox de código.",
       },
     },
     profile: {
       title: "Perfil",
-      description: "Como seu perfil aparece no Unsloth.",
+      description: "Como seu perfil aparece no Unslothed.",
       changePicture: "Alterar foto de perfil",
       displayName: "Nome de exibição",
-      nickname: "Como o Unsloth deve chamar você?",
+      nickname: "Como o Unslothed deve chamar você?",
       nicknamePlaceholder: "Apelido",
       nicknameSaved: "Nome preferido salvo",
       avatarShape: "Formato da foto de perfil",
@@ -640,10 +640,10 @@ export const ptBR = {
       stats: {
         title: "Suas estatísticas",
         subtitle:
-          "Tudo abaixo é calculado a partir do seu próprio histórico. Nada é coletado nem enviado ao Unsloth.",
+          "Tudo abaixo é calculado a partir do seu próprio histórico. Nada é coletado nem enviado ao Unslothed.",
         retry: "Tentar novamente",
         privacyNote:
-          "As estatísticas são calculadas a partir do histórico de chats e de treinos guardado pela sua instalação do Unsloth. Nada é coletado e nada é enviado ao Unsloth ou a terceiros.",
+          "As estatísticas são calculadas a partir do histórico de chats e de treinos guardado pela sua instalação do Unslothed. Nada é coletado e nada é enviado ao Unslothed ou a terceiros.",
         emptyChats:
           "Nenhum chat ainda. Comece uma conversa e suas estatísticas aparecerão aqui.",
         lifetimeTokens: "Tokens acumulados",
@@ -696,7 +696,7 @@ export const ptBR = {
     },
     appearance: {
       title: "Aparência",
-      description: "A aparência do Unsloth neste dispositivo.",
+      description: "A aparência do Unslothed neste dispositivo.",
       theme: {
         title: "Tema",
         label: "Esquema de cores",
@@ -707,7 +707,7 @@ export const ptBR = {
       },
       palette: {
         label: "Paleta de cores",
-        description: "Cores usadas no Unsloth, nos modos claro e escuro.",
+        description: "Cores usadas no Unslothed, nos modos claro e escuro.",
         standard: "Padrão",
         classic: "Clássico",
         minimal: "Minimalista",
@@ -763,7 +763,7 @@ export const ptBR = {
         },
         uiFontSize: {
           label: "Tamanho da fonte da interface",
-          description: "Ajuste o tamanho base da interface do Unsloth.",
+          description: "Ajuste o tamanho base da interface do Unslothed.",
         },
         codeFontSize: {
           label: "Tamanho da fonte de código",
@@ -793,7 +793,7 @@ export const ptBR = {
       language: {
         title: "Idioma",
         label: "Idioma de exibição",
-        description: "O idioma utilizado pelo Unsloth.",
+        description: "O idioma utilizado pelo Unslothed.",
         autoDetect: "Detecção automática",
       },
       layout: {
@@ -820,7 +820,7 @@ export const ptBR = {
     },
     resources: {
       title: "Sistema",
-      description: "Monitore o hardware e o armazenamento deste servidor Unsloth.",
+      description: "Monitore o hardware e o armazenamento deste servidor Unslothed.",
       liveUpdates: "Atualizações ao vivo",
       floatingWindow: "Janela flutuante",
       disableOverlay: "Desativar sobreposição",
@@ -874,7 +874,7 @@ export const ptBR = {
           description: "Use sua própria compilação do llama-server.",
           hint: "Escolha a pasta do llama.cpp que contém o llama-server ou uma compilação em que ele esteja em build/bin. O runtime personalizado é usado no chat GGUF, em embeddings e nos modelos de voz compatíveis. Variáveis de ambiente continuam tendo prioridade.",
           automatic: "Automático (incluído)",
-          bundled: "Usa o runtime llama.cpp instalado pelo Unsloth.",
+          bundled: "Usa o runtime llama.cpp instalado pelo Unslothed.",
           active: "Seu llama-server personalizado será usado no próximo carregamento de modelo.",
           environmentManaged: "Gerenciado pela variável de ambiente {variable}.",
           missingBinary: "O llama-server não está mais disponível nesta pasta. Escolha outra pasta ou use o runtime incluído.",
@@ -897,7 +897,7 @@ export const ptBR = {
         },
         unsupported: {
           notInstalled: "No managed llama.cpp install was found, so there is no backend to switch.",
-          localLink: "llama.cpp is a local directory you linked yourself, so Unsloth will not replace it.",
+          localLink: "llama.cpp is a local directory you linked yourself, so Unslothed will not replace it.",
           sourceBuild: "This llama.cpp was built from source, so its backend cannot be switched from here.",
           customPath: "Uma pasta personalizada do llama.cpp está selecionada. A compilação dela determina o backend de computação.",
           unresolved: "The available backends could not be checked. Check your connection and try again.",
@@ -967,7 +967,7 @@ export const ptBR = {
       description:
         "Conecte agentes de código como Claude Code e Codex a um modelo local com unsloth start.",
       intro:
-        "conecta Claude Code, Codex, Hermes, OpenClaw, OpenCode e outros agentes a um modelo servido localmente pelo Unsloth, totalmente offline. Ele executa um servidor compatível com a API da OpenAI e nunca altera os arquivos de configuração do seu agente.",
+        "conecta Claude Code, Codex, Hermes, OpenClaw, OpenCode e outros agentes a um modelo servido localmente pelo Unslothed, totalmente offline. Ele executa um servidor compatível com a API da OpenAI e nunca altera os arquivos de configuração do seu agente.",
       readDocs: "Ler a documentação",
       copy: "Copiar",
       copied: "Copiado",
@@ -990,11 +990,11 @@ export const ptBR = {
       agentDocs: "Abrir a documentação de configuração do {agent}",
       copyGeneratedCommand: "Copiar comando gerado",
       modelNote:
-        "O Codex exige um modelo GGUF servido pelo llama-server. Outros agentes também podem usar modelos baseados em transformers; remova --model para usar o modelo já carregado no Unsloth.",
+        "O Codex exige um modelo GGUF servido pelo llama-server. Outros agentes também podem usar modelos baseados em transformers; remova --model para usar o modelo já carregado no Unslothed.",
       subagent: {
         title: "Usar um modelo local como subagente",
         description:
-          "Mantenha o {agent} no modelo atual e delegue tarefas selecionadas a este modelo local do Unsloth.",
+          "Mantenha o {agent} no modelo atual e delegue tarefas selecionadas a este modelo local do Unslothed.",
         setupCommand: "Comando de configuração",
         copySetupCommand: "Copiar comando de configuração do subagente",
         usagePrompt: "Depois, no {agent}, digite:",
@@ -1025,7 +1025,7 @@ export const ptBR = {
       options: {
         title: "Opções comuns",
         description:
-          "As flags do Unsloth são interpretadas primeiro; tudo o que ele não reconhecer é repassado direto ao agente.",
+          "As flags do Unslothed são interpretadas primeiro; tudo o que ele não reconhecer é repassado direto ao agente.",
         model:
           "Seleciona um modelo. Sem --model, o unsloth start usa o modelo carregado no Studio e retorna erro se não houver nenhum.",
         contextLength:
@@ -1038,11 +1038,11 @@ export const ptBR = {
         serve: "Ativa ou desativa o servidor local automático.",
         launch: "Inicia o agente ou apenas exibe o comando e o ambiente.",
         persist:
-          "Mantém entre execuções o armazenamento de agentes gerenciado pelo Unsloth.",
+          "Mantém entre execuções o armazenamento de agentes gerenciado pelo Unslothed.",
         asSubagent:
-          "Mantém o agente principal no modelo atual e registra o Unsloth como subagente local (Claude Code, Codex e OpenCode).",
+          "Mantém o agente principal no modelo atual e registra o Unslothed como subagente local (Claude Code, Codex e OpenCode).",
         apiKey:
-          "Informa sua chave de API do Unsloth (ou defina UNSLOTH_API_KEY).",
+          "Informa sua chave de API do Unslothed (ou defina UNSLOTH_API_KEY).",
         yolo: "Pula os pedidos de aprovação. Use apenas em ambientes confiáveis.",
       },
       remote: {
@@ -1053,7 +1053,7 @@ export const ptBR = {
       passthrough: {
         title: "Repassar argumentos ao agente",
         description:
-          "Os argumentos após as flags do Unsloth são encaminhados ao próprio agente, então comandos nativos como resume continuam funcionando:",
+          "Os argumentos após as flags do Unslothed são encaminhados ao próprio agente, então comandos nativos como resume continuam funcionando:",
       },
       dryRun: {
         title: "Visualizar sem iniciar",
@@ -1243,7 +1243,7 @@ export const ptBR = {
     apiKeys: {
       title: "API",
       description:
-        "Acesse o Unsloth por meio da API compatível com OpenAI.",
+        "Acesse o Unslothed por meio da API compatível com OpenAI.",
       readDocs: "Leia a documentação da API",
       noAccess: "Nenhum acesso à API ainda.",
       accessTokens: "Tokens de acesso",
@@ -1271,7 +1271,7 @@ export const ptBR = {
       osWindows: "Windows",
       secureHttps: "HTTPS seguro",
       secureHttpsHint:
-        "O endereço 0.0.0.0 ainda está acessível globalmente. Para segurança total, inicie o Unsloth com --secure para expor apenas este link HTTPS.",
+        "O endereço 0.0.0.0 ainda está acessível globalmente. Para segurança total, inicie o Unslothed com --secure para expor apenas este link HTTPS.",
       copyTunnelUrl: "Copiar URL do túnel",
       copySnippet: "Copiar trecho de código",
       copy: "Copiar",
@@ -1305,7 +1305,7 @@ export const ptBR = {
       title: "Sobre",
       description:
         "Documentação, notas de lançamento, feedback e informações da compilação.",
-      studioVersion: "Versão do Unsloth",
+      studioVersion: "Versão do Unslothed",
       packageVersion: "Versão do pacote",
       desktopAppVersion: "Versão do aplicativo de desktop",
       desktopAppVersionUnavailable: "Indisponível",
@@ -1324,7 +1324,7 @@ export const ptBR = {
       reportIssue: "Reportar um problema",
       license: {
         sectionTitle: "Licença",
-        studioLabel: "Unsloth",
+        studioLabel: "Unslothed",
         studioLicense: "AGPL-3.0",
         studioDescription:
           "Código aberto sob a licença GNU AGPL v3.0.",
@@ -1333,19 +1333,19 @@ export const ptBR = {
         libraryDescription: "Licenciado sob a licença Apache 2.0.",
       },
       dangerZone: "Zona de perigo",
-      shutDownStudio: "Desligar o Unsloth",
+      shutDownStudio: "Desligar o Unslothed",
       shutDownStudioDescription:
-        "Interrompe o servidor Unsloth e encerra sua sessão.",
+        "Interrompe o servidor Unslothed e encerra sua sessão.",
       shutDown: "Desligar",
       update: {
-        title: "Atualizar Unsloth",
+        title: "Atualizar Unslothed",
         commandText: "Texto de {label}",
         copied: "Copiado",
         copyCommand: "Copiar comando",
         commandCopied: "{label} copiado",
         copyNamedCommand: "Copiar {label}",
-        checkingInstall: "Verificando como o Unsloth foi instalado...",
-        installIntro: "Para instalar ou atualizar o Unsloth:",
+        checkingInstall: "Verificando como o Unslothed foi instalado...",
+        installIntro: "Para instalar ou atualizar o Unslothed:",
         localUpdateHeading: "Atualização local",
         installCommandUnix: "Comando de instalação para macOS/Linux",
         installCommandWindows: "Comando de instalação para Windows",
@@ -1359,7 +1359,7 @@ export const ptBR = {
           "Foi detectada uma instalação do pacote via código-fonte ou VCS. Reinstale a partir do caminho local original ou da URL do Git.",
         repoCheckoutFallback:
           "Se você ainda tiver a cópia local do repositório, execute o instalador local a partir dela:",
-        restartAfterUpdate: "Reinicie o Unsloth após a atualização.",
+        restartAfterUpdate: "Reinicie o Unslothed após a atualização.",
         desktopManaged:
           "O aplicativo de desktop verifica automaticamente se há novas versões. Você também pode verificar ou atualizar aqui a qualquer momento.",
         desktopReady: "Atualizações do aplicativo de desktop",
@@ -1380,7 +1380,7 @@ export const ptBR = {
           "Verifique sua conexão e tente novamente.",
         desktopCurrent: "O aplicativo de desktop está atualizado",
         desktopCurrentDescription:
-          "O Unsloth continuará verificando automaticamente.",
+          "O Unslothed continuará verificando automaticamente.",
         checkForUpdates: "Verificar se há atualizações",
         checkAgain: "Verificar novamente",
         retryCheck: "Tentar novamente",
@@ -1388,7 +1388,7 @@ export const ptBR = {
         updateNow: "Atualizar agora",
         openReleasePage: "Abrir página de lançamentos",
         unknownInstall:
-          "Não foi possível detectar como o Unsloth foi instalado. Para instalações via instalador ou PyPI, use os comandos acima.",
+          "Não foi possível detectar como o Unslothed foi instalado. Para instalações via instalador ou PyPI, use os comandos acima.",
         localCheckout:
           "Para instalações feitas a partir de uma cópia local do repositório, execute o instalador local nesse diretório:",
         docs: "Docs de instalação:",
@@ -1894,7 +1894,7 @@ export const ptBR = {
       },
       startFailed: "Falha ao iniciar o treinamento",
       startUnconfirmed:
-        "O Unsloth não conseguiu confirmar se o treinamento foi iniciado. O status está sendo verificado em segundo plano.",
+        "O Unslothed não conseguiu confirmar se o treinamento foi iniciado. O status está sendo verificado em segundo plano.",
       stopFailed: "Falha ao interromper o treinamento",
       trainingStillActiveTitle: "O treinamento ainda está ativo",
       stopBeforeConfig:

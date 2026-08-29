@@ -1,5 +1,5 @@
 {
-  "productName": "Unsloth",
+  "productName": "Unslothed",
   "identifier": "ai.unsloth.studio",
   "build": {
     "beforeDevCommand": {
@@ -21,7 +21,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Unsloth",
+        "title": "Unslothed",
         "width": 760,
         "height": 560,
         "center": true,
