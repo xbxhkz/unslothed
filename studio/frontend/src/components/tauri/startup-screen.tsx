@@ -112,7 +112,7 @@ function Logo() {
         className="text-ui-50 font-semibold leading-none tracking-[-0.02em] text-foreground"
         style={{ fontFamily: '"Hellix", sans-serif' }}
       >
-        unsloth
+        unslothed
       </span>
     </div>
   );

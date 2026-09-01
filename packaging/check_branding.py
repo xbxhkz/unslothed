@@ -89,7 +89,18 @@ check(not missing, f"locales missing the 'Unslothed' literal: {missing}")
 #    \bUnsloth\b in the first place (there is no boundary between "y" and "U",
 #    or between "h" and "S"), so those ~40 code-only hits need no allowlist
 #    entry at all; only standalone-word occurrences reach this list.
-BRAND_WORD = re.compile(r"\bUnsloth\b(?!ed)")
+#
+#    Case-INsensitive: a first version of this check matched "Unsloth" only,
+#    which is a real blind spot -- two hardcoded `Logo()` components rendered
+#    a lowercase `unsloth` wordmark (studio/frontend/src/components/tauri/
+#    startup-screen.tsx and update-screen.tsx, shown on nearly every launch
+#    and every update) and neither was on the original capitalized-only
+#    allowlist, so the check passed while they sat unrenamed. Matching
+#    case-insensitively catches that class of miss, at the cost of also
+#    catching every lowercase functional string (CLI commands, CSS classes,
+#    storage keys, HF repo-id prefixes, env vars) that must NOT be renamed --
+#    hence the much larger allowlist below.
+BRAND_WORD = re.compile(r"\bUnsloth\b(?!ed)", re.IGNORECASE)
 
 # (file suffix relative to src/, or None for any file, substring to match, reason)
 KEEP_ALLOWLIST = [
@@ -161,6 +172,124 @@ KEEP_ALLOWLIST = [
     ("features/studio/sections/training-memory-params.tsx",
      'value="unsloth">Unsloth<',
      "names the gradient-checkpointing technique \"unsloth\", not this product"),
+
+    # -- Lowercase functional strings, surfaced by the case-insensitive sweep --
+    (None,
+     "unsloth studio update",
+     "real CLI command; the `unsloth` package/binary is not renamed by this task"),
+    (None,
+     "unsloth studio reset-password",
+     "real CLI command"),
+    (None,
+     "unsloth start",
+     "real CLI command/subcommand"),
+    ("features/auth/components/auth-form.tsx",
+     'HIDDEN_LOGIN_USERNAME = "unsloth"',
+     "the real default admin/login username (backend DEFAULT_ADMIN_USERNAME); "
+     "renaming the literal would lock out the default account"),
+    (None,
+     "sk-unsloth-",
+     "matches API_KEY_PREFIX in backend/auth/storage.py, checked with "
+     "token.startswith(...); renaming misdocuments the real key format"),
+    (None,
+     "UNSLOTH_API_KEY",
+     "real environment variable"),
+    (None,
+     "UNSLOTH_STUDIO_URL",
+     "real environment variable read by `unsloth start`"),
+    ("features/deep-links/parse-deep-link.ts",
+     "unsloth://open_from_hf",
+     "the registered deep-link URL scheme (matches tauri.conf.json's "
+     "plugins.deep-link.desktop.schemes); renaming orphans existing links"),
+    (None,
+     "unslothai/unsloth",
+     "the real GitHub path (github.com/unslothai/unsloth) for the upstream "
+     "training library's source, issues, or license file -- not this product"),
+    ("features/images/images-page.tsx",
+     "Only unsloth or on-device image models can be loaded here",
+     "describes the adjacent HF-repo-id gate (startsWith('unsloth/')) -- "
+     "\"unsloth\" here is the HF publisher, matching the check right above it"),
+    ("features/video/video-page.tsx",
+     "Only unsloth or on-device video models can be loaded here",
+     "describes the adjacent HF-repo-id gate (startsWith('unsloth/')) -- "
+     "\"unsloth\" here is the HF publisher, matching the check right above it"),
+    ("hooks/use-hardware-info.ts",
+     "unsloth: string | null;",
+     "field reporting the installed unsloth (training-library) package "
+     "version from the backend's /versions endpoint -- a field name"),
+    ("hooks/use-hardware-info.ts",
+     "unsloth: null,",
+     "same field, default value"),
+    ("hooks/use-hardware-info.ts",
+     "?.unsloth ?? null,",
+     "same field, read from the backend response"),
+    ("lib/tauri-diagnostics.ts",
+     "unsloth\\/studio",
+     "matches the real ~/.unsloth config directory this app reads/writes, "
+     "used to redact local usernames out of shared diagnostics -- renaming "
+     "the pattern without renaming the directory breaks the redaction "
+     "(Unix path form)"),
+    ("lib/tauri-diagnostics.ts",
+     "unsloth\\\\studio",
+     "same redaction regex, Windows path form (\\Users\\...\\.unsloth\\studio)"),
+    ("features/profile/sloth-avatars.ts",
+     "Sloth emojis/UnSloth",
+     "matches the literal asset filename under public/Sloth emojis/; "
+     "renaming the string without renaming the file 404s the image"),
+    ("features/settings/components/remote-access-section.tsx",
+     "sign in as unsloth",
+     "the real default remote-login username (backend DEFAULT_ADMIN_USERNAME), "
+     "named in a prose sentence -- matches the brief's own worked example: "
+     "\"as unsloth\" stays, \"The Unsloth Desktop App\" (renamed) does not"),
+]
+
+# Broad structural patterns: a LOWERCASE "unsloth" immediately fused to a
+# separator character it would never sit next to in English prose (prose
+# always has a space: "the unsloth backend", never "theunsloth-backend").
+# Each pattern is a whole *category* of hit, so it gets one reason for the
+# category rather than one entry per occurrence -- there are ~300 such
+# occurrences (HF repo ids alone account for over half of them, in the model
+# catalog and its tests).
+#
+# Deliberately case-SENSITIVE (no re.IGNORECASE), unlike BRAND_WORD above.
+# Every real identifier/URL/repo-id these patterns cover is conventionally
+# all-lowercase (HF org slugs, CSS classes, storage keys, domains). Giving
+# these IGNORECASE would let them also swallow a *capitalized* "Unsloth"
+# sitting next to the same punctuation -- and a capitalized hit is exactly
+# the shape of a real leftover brand mention. This was caught for real:
+# control 2 below first used a case-insensitive `"unsloth"` pattern, which
+# silently accepted `alt="Unsloth"` (a genuine un-renamed brand string) as
+# though it were the lowercase HF-owner-slug case. Case-sensitivity here is
+# load-bearing, not a style choice.
+KEEP_PATTERNS = [
+    (re.compile(r"unsloth/"),
+     "the Hugging Face repo-id prefix \"unsloth/...\" (e.g. "
+     "unsloth/Llama-3.1-8B-Instruct) naming a real model/dataset published "
+     "by the unsloth HF org -- not a brand mention. Covers "
+     ".startsWith(\"unsloth/\") gates too."),
+    (re.compile(r"unsloth-[a-z0-9]"),
+     "a lowercase, hyphen-joined \"unsloth-...\" token: a CSS class name, "
+     "IndexedDB/Dexie database name, custom DOM event name, localStorage "
+     "key, HTTP header name, quantization-suffix convention "
+     "(-unsloth-bnb-4bit), or asset filename. English prose never "
+     "concatenates the brand name directly against a hyphen."),
+    (re.compile(r"unsloth:"),
+     "a colon-namespaced custom event/message-channel name (e.g. "
+     "\"unsloth:model-ejected\") or the registered deep-link URL scheme "
+     "(\"unsloth:\" as url.protocol) -- an identifier, not prose"),
+    (re.compile(r"unsloth\.[a-z]"),
+     "a dot-namespaced localStorage/persistence key (e.g. "
+     "\"unsloth.hub.modelsTab\") -- renaming drops every existing user's "
+     "saved value for it on upgrade"),
+    (re.compile(r'"unsloth"'),
+     "a bare quoted literal \"unsloth\" -- either the Hugging Face "
+     "owner/publisher slug (compared or assigned: owner ===/=== \"unsloth\", "
+     "ownerScope: \"unsloth\") or the gradient-checkpointing technique name "
+     "in a type union (\"none\" | \"true\" | \"unsloth\"); never brand prose, "
+     "which is never a bare 7-character quoted token"),
+    (re.compile(r"unsloth\.ai/"),
+     "the real external site unsloth.ai (docs, install script, changelog) "
+     "-- upstream's site, not this app"),
 ]
 
 # Lightweight comment tracker: `//` lines, and `/* ... */` / JSX `{/* ... */}`
@@ -219,6 +348,11 @@ for path in sorted(FRONTEND.joinpath("src").rglob("*.ts*")):
             if substring in line:
                 allowed = True
                 break
+        if not allowed:
+            for pattern, _reason in KEEP_PATTERNS:
+                if pattern.search(line):
+                    allowed = True
+                    break
         if not allowed:
             failures.append(
                 f"{path.relative_to(ROOT)}:{i + 1}: leftover 'Unsloth' not on the "
