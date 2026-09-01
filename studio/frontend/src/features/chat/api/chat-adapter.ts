@@ -2517,7 +2517,7 @@ async function ensureDefaultModelDownloaded(
   };
   const totalLabel = formatDownloadBytes(expectedBytes);
   const description =
-    `Unsloth couldn’t find an existing model. Unsloth is now getting ` +
+    `Unslothed couldn’t find an existing model. Unslothed is now getting ` +
     `${DEFAULT_CHAT_MODEL_LABEL} ready for use. You can stop the download or ` +
     `manage models later in the 'Model hub'`;
   setToast(

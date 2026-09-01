@@ -104,7 +104,7 @@ function asTransportFailure(err: unknown): unknown {
     );
   }
   return Object.assign(
-    new Error("Unsloth isn't running -- please relaunch it."),
+    new Error("Unslothed isn't running -- please relaunch it."),
     { unslothTransportFailure: true },
   );
 }

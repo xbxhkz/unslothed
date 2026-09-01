@@ -683,7 +683,7 @@ export function ApiMonitorPage(): ReactElement {
             API
           </h1>
           <p className="text-sm text-muted-foreground">
-            Live traffic through Unsloth&apos;s OpenAI-compatible server.
+            Live traffic through Unslothed&apos;s OpenAI-compatible server.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

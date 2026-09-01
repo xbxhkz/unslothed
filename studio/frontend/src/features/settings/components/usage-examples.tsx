@@ -90,7 +90,7 @@ const JAVASCRIPT_TYPES = new Set<ExampleType>([
   "javascriptAdvanced",
 ]);
 
-const PROMPT = "What is Unsloth?";
+const PROMPT = "What is Unslothed?";
 // web_search + python + terminal are the reliable built-in tools.
 const TOOLS = ["web_search", "python", "terminal"];
 const ADV = {

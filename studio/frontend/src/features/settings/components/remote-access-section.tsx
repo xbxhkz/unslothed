@@ -209,7 +209,7 @@ function RemotePasswordRow({
   return (
     <SettingsRow
       label="Remote password"
-      description="Remote browsers sign in as unsloth. The Unsloth Desktop App keeps signing in automatically."
+      description="Remote browsers sign in as unsloth. The Unslothed Desktop App keeps signing in automatically."
     >
       <ChangePasswordDialog initial={status.passwordPending} onDone={onDone} />
     </SettingsRow>
@@ -372,7 +372,7 @@ export function RemoteAccessSection() {
               <AccessStatus status={status} />
             </div>
             <p className="text-xs text-muted-foreground leading-relaxed">
-              Use Unsloth and its APIs from other devices through a secure,
+              Use Unslothed and its APIs from other devices through a secure,
               temporary Cloudflare URL.
             </p>
           </div>
@@ -400,7 +400,7 @@ export function RemoteAccessSection() {
 
         <SettingsRow
           label="Start automatically"
-          description="Create a new remote URL each time Unsloth starts. Stopping remote access now won’t turn this off."
+          description="Create a new remote URL each time Unslothed starts. Stopping remote access now won’t turn this off."
         >
           <Switch
             checked={status?.autoStart ?? false}

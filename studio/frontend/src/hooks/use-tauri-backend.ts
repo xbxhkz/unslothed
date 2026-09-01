@@ -82,12 +82,12 @@ function wait(ms: number) {
 function externalConflictMessage(preflight: DesktopPreflightResult) {
   if (preflight.reason === "desktop_owned_backend_active") {
     return preflight.port
-      ? `A desktop-owned Unsloth server for this install is already running on port ${preflight.port}. Quit the other desktop app instance, then try again.`
-      : "A desktop-owned Unsloth server for this install is already running. Quit the other desktop app instance, then try again.";
+      ? `A desktop-owned Unslothed server for this install is already running on port ${preflight.port}. Quit the other desktop app instance, then try again.`
+      : "A desktop-owned Unslothed server for this install is already running. Quit the other desktop app instance, then try again.";
   }
 
   if (preflight.reason === "desktop_owned_backend_starting") {
-    return "The desktop-owned Unsloth backend is still starting. Wait a moment, then try again.";
+    return "The desktop-owned Unslothed backend is still starting. Wait a moment, then try again.";
   }
 
   // A backend we cannot attribute to this install no longer reaches here: the
@@ -96,13 +96,13 @@ function externalConflictMessage(preflight: DesktopPreflightResult) {
 
   if (preflight.reason?.startsWith("desktop_owned_backend_unmanageable:")) {
     return preflight.port
-      ? `A desktop-owned Unsloth backend on port ${preflight.port} cannot be safely controlled by this desktop app. Stop that backend, then reopen Unsloth.`
-      : "A desktop-owned Unsloth backend cannot be safely controlled by this desktop app. Stop that backend, then reopen Unsloth.";
+      ? `A desktop-owned Unslothed backend on port ${preflight.port} cannot be safely controlled by this desktop app. Stop that backend, then reopen Unslothed.`
+      : "A desktop-owned Unslothed backend cannot be safely controlled by this desktop app. Stop that backend, then reopen Unslothed.";
   }
 
   return preflight.port
-    ? `An Unsloth server for this install is already running from a terminal on port ${preflight.port}. Stop that server, or run \`unsloth studio update\` from that terminal before using the desktop app.`
-    : "An Unsloth server for this install is already running from a terminal. Stop that server, or run `unsloth studio update` from that terminal before using the desktop app.";
+    ? `An Unslothed server for this install is already running from a terminal on port ${preflight.port}. Stop that server, or run \`unsloth studio update\` from that terminal before using the desktop app.`
+    : "An Unslothed server for this install is already running from a terminal. Stop that server, or run `unsloth studio update` from that terminal before using the desktop app.";
 }
 
 async function waitForManagedServerPort(
@@ -350,7 +350,7 @@ export function useTauriBackend() {
       if (msg.includes("already running")) {
         startingRef.current = false;
         setBackendError(
-          "Managed server is already running but did not report a port. Restart Unsloth and try again.",
+          "Managed server is already running but did not report a port. Restart Unslothed and try again.",
         );
         return;
       }
@@ -648,7 +648,7 @@ export function useTauriBackend() {
       register<string>("server-start-timeout", (e) => {
         startingRef.current = false;
         startTimedOutRef.current = true;
-        setBackendError(e.payload || "The Unsloth backend did not start in time");
+        setBackendError(e.payload || "The Unslothed backend did not start in time");
       });
 
       register<string>("server-log", (e) => {
@@ -692,7 +692,7 @@ export function useTauriBackend() {
       const detail =
         event instanceof CustomEvent && typeof event.detail === "string"
           ? event.detail
-          : "Desktop authentication failed. Update or repair the managed Unsloth install, then restart Unsloth.";
+          : "Desktop authentication failed. Update or repair the managed Unslothed install, then restart Unslothed.";
       setAuthFailure(detail);
     };
     window.addEventListener("tauri-auth-failed", onAuthFailed);

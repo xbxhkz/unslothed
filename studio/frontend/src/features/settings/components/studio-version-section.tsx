@@ -94,7 +94,7 @@ export function StudioVersionSection({
   }, []);
 
   return (
-    <SettingsSection title="Unsloth">
+    <SettingsSection title="Unslothed">
       <SettingsRow label={t("settings.about.studioVersion")}>
         <code className="font-mono text-xs text-muted-foreground">
           {studioVersion}

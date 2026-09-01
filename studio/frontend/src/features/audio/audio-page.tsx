@@ -1962,7 +1962,7 @@ export function AudioPage({ active = true }: { active?: boolean }) {
               onValueChange={(v) => {
                 if (v !== "train") return;
                 toast.info(
-                  "Audio fine-tuning lives on the Train page. Unsloth trains TTS and STT models there. Pick an audio model and appropriate dataset.",
+                  "Audio fine-tuning lives on the Train page. Unslothed trains TTS and STT models there. Pick an audio model and appropriate dataset.",
                   { duration: 8000 },
                 );
                 void navigateSelf({ to: "/studio" });
