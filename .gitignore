@@ -45,6 +45,10 @@ MANIFEST
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+# ...except ours: packaging/Unslothed.spec is hand-authored and checked in on
+# purpose, not template-generated. Without this negation `git add -A` and
+# most tooling silently skip it.
+!packaging/Unslothed.spec
 
 # Installer logs
 pip-log.txt
