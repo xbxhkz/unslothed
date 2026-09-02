@@ -320,6 +320,48 @@ def _is_comment_masked(lines):
 
 SPDX_LINE = re.compile(r"^\s*//\s*(SPDX-License-Identifier|Copyright)\b")
 
+
+def _spans_overlap(a_start, a_end, b_start, b_end):
+    return a_start < b_end and b_start < a_end
+
+
+def _allowlist_spans(line, file_suffix_filter):
+    """Every (start, end) span in `line` covered by a KEEP_ALLOWLIST entry
+    that applies to this file. Computed per line, not per match: a match is
+    "on the allowlist" only if one of these spans overlaps *its own* span --
+    a covered span elsewhere on the line does not count.
+    """
+    spans = []
+    for file_suffix, substring, _reason in KEEP_ALLOWLIST:
+        if file_suffix is not None and file_suffix != file_suffix_filter:
+            continue
+        # A bare "Unsloth" entry only allows a line that is *exactly* that
+        # word once stripped (a bare JSX text node): the whole line is the
+        # match, so its span trivially covers itself.
+        if substring == "Unsloth":
+            if line.strip() == "Unsloth":
+                start = line.index("Unsloth")
+                spans.append((start, start + len("Unsloth")))
+            continue
+        start = 0
+        while True:
+            idx = line.find(substring, start)
+            if idx == -1:
+                break
+            spans.append((idx, idx + len(substring)))
+            start = idx + 1
+    return spans
+
+
+def _pattern_spans(line):
+    """Every (start, end) span in `line` covered by a KEEP_PATTERNS regex."""
+    spans = []
+    for pattern, _reason in KEEP_PATTERNS:
+        for m in pattern.finditer(line):
+            spans.append(m.span())
+    return spans
+
+
 for path in sorted(FRONTEND.joinpath("src").rglob("*.ts*")):
     if "i18n" in path.parts and "locales" in path.parts:
         continue  # governed separately by checks #4 and #5
@@ -330,34 +372,30 @@ for path in sorted(FRONTEND.joinpath("src").rglob("*.ts*")):
     for i, line in enumerate(lines):
         if SPDX_LINE.match(line) or comment_masked[i]:
             continue
-        if not BRAND_WORD.search(line):
+        matches = list(BRAND_WORD.finditer(line))
+        if not matches:
             continue
-        allowed = False
-        for file_suffix, substring, _reason in KEEP_ALLOWLIST:
-            if file_suffix is not None and file_suffix != rel_to_src:
+        # Computed once per line (cheap enough at this file count), then
+        # checked per match below. What matters is that coverage is decided
+        # per MATCH, not per line: a legitimate lowercase hit earlier on a
+        # line must not excuse an unrelated capitalized leftover later on
+        # the same line. An earlier version of this check tested only
+        # `pattern.search(line)` / `substring in line` -- true for the whole
+        # line the instant *any* occurrence matched anywhere on it -- which
+        # is exactly the gap a composite line like
+        #   `ownerScope === "unsloth" ? "Unsloth Verified" : "Other"`
+        # slips through: the bare-quoted "unsloth" comparison is legitimate,
+        # but "Unsloth Verified" is a real leftover, and line-scope matching
+        # would have excused both.
+        covering_spans = _allowlist_spans(line, rel_to_src) + _pattern_spans(line)
+        for m in matches:
+            start, end = m.span()
+            if any(_spans_overlap(start, end, cs, ce) for cs, ce in covering_spans):
                 continue
-            # A bare "Unsloth" entry only allows a line that is *exactly* that
-            # word once stripped (a bare JSX text node) -- never used as a
-            # loose substring, which would also swallow unrelated hits in the
-            # same file.
-            if substring == "Unsloth":
-                if line.strip() == "Unsloth":
-                    allowed = True
-                    break
-                continue
-            if substring in line:
-                allowed = True
-                break
-        if not allowed:
-            for pattern, _reason in KEEP_PATTERNS:
-                if pattern.search(line):
-                    allowed = True
-                    break
-        if not allowed:
             failures.append(
-                f"{path.relative_to(ROOT)}:{i + 1}: leftover 'Unsloth' not on the "
-                f"allowlist -- either rename it or add it to KEEP_ALLOWLIST with a "
-                f"reason: {line.strip()[:160]!r}")
+                f"{path.relative_to(ROOT)}:{i + 1}:{start + 1}: leftover 'Unsloth' not "
+                f"on the allowlist -- either rename it or add it to KEEP_ALLOWLIST/"
+                f"KEEP_PATTERNS with a reason: {line.strip()[:160]!r}")
 
 if failures:
     print("BRANDING CHECK FAILED")
