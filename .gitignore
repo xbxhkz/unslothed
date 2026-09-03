@@ -50,6 +50,15 @@ MANIFEST
 # most tooling silently skip it.
 !packaging/Unslothed.spec
 
+# Build artefacts from packaging/build-installer.ps1. packaging/dist/ and
+# packaging/build/ are already caught by the unanchored dist/ and build/
+# patterns above; listed explicitly anyway so the packaging/ output surface
+# is documented in one place. packaging/Output/ (the compiled installer) has
+# no other pattern covering it.
+packaging/dist/
+packaging/build/
+packaging/Output/
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
