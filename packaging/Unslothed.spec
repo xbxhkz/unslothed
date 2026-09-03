@@ -7,6 +7,7 @@
 # Run via packaging/build-installer.ps1, not directly -- the frontend must be
 # built first or the app ships with no UI.
 
+import importlib.metadata
 import importlib.util
 import sys
 from pathlib import Path
@@ -83,9 +84,10 @@ for optional in ("vendor", "plugins"):
 # real tool call -- the most expensive place to discover a packaging bug.
 _torch_spec = importlib.util.find_spec("torch")
 assert _torch_spec is not None and _torch_spec.origin, (
-    "torch is not importable in the environment running this spec. Build "
-    "with the same Python environment the app runs against -- one with "
-    "torch installed -- not a bare system interpreter."
+    "torch is not importable in the environment running this spec "
+    f"(sys.executable={sys.executable}). Build with the same Python "
+    "environment the app runs against -- one with torch installed -- not a "
+    "bare system interpreter."
 )
 SITE = Path(_torch_spec.origin).parent.parent
 assert SITE.is_dir(), (
@@ -93,6 +95,28 @@ assert SITE.is_dir(), (
     f"{_torch_spec.origin!r}, but that directory does not exist."
 )
 print(f"[Unslothed.spec] SITE (site-packages, via torch's spec.origin) = {SITE}")
+
+# Windows CUDA wheels (the "+cuXXX" local version) bundle their CUDA payload
+# INSIDE torch/lib/ -- there is no separate nvidia-* package to check the way
+# there would be on Linux, so nvidia's absence from the heavy-tree loop below
+# is expected and not itself a signal of anything wrong. What *is* checked
+# here: whether this interpreter's torch is a CUDA build at all. A CPU-only
+# interpreter (e.g. system Python instead of the Studio venv) passes every
+# assert above and produces a complete, working-looking bundle that silently
+# never uses the GPU -- nothing downstream catches this, since the smoke test
+# only asserts that tools register, not which torch is underneath.
+_torch_version = importlib.metadata.version("torch")
+assert "+cu" in _torch_version, (
+    f"torch {_torch_version} in this environment (sys.executable="
+    f"{sys.executable}) is not a CUDA build (no '+cuXXX' tag). This spec "
+    "bundles torch wholesale and ships it as the app's only torch -- "
+    "building from a CPU-only interpreter would silently produce a "
+    "complete, working-looking app that never uses the GPU, and nothing "
+    "downstream would catch it (the smoke test only checks that tools "
+    "register). Activate the Studio venv (torch 2.10.0+cu130), not the "
+    "system interpreter."
+)
+print(f"[Unslothed.spec] torch version = {_torch_version} (CUDA build confirmed)")
 
 # torch and torchvision are load-bearing -- hiddenimports below assumes both
 # are on disk (assist_vision calls torchvision.models.detection and
@@ -136,6 +160,7 @@ hiddenimports = [
     "insightface",
     "insightface.app",
     "insightface.model_zoo",
+    "PIL",  # `from PIL import Image` inside webcam.py and paths.py
     # assist_code needs no third-party imports -- it is stdlib only, and its
     # language servers are external processes installed on first use.
 ]
