@@ -70,6 +70,82 @@ for optional in ("vendor", "plugins"):
     else:
         print(f"[Unslothed.spec] optional data dir {optional} not present at {src}, skipping")
 
+# --- frozen __file__/parents mismatches -------------------------------------
+# Four instances of one bug class surfaced one at a time across this task:
+# torch, insightface, sd_cpp, and now this one (routes/preview.py crashing the
+# app at startup). The shape is always the same: a module does
+# Path(__file__).parent[...] / "some/relative/resource", which is correct in
+# the dev tree (nesting matches studio/backend/<module path>) but wrong once
+# frozen, because PyInstaller gives frozen modules a synthetic __file__ rooted
+# at sys._MEIPASS using the module's DOTTED IMPORT NAME (e.g. "routes.preview"
+# -> _internal/routes/preview.py), not its original on-disk nesting under
+# studio/backend/. A chain of N parents that correctly reaches studio/backend/
+# in the dev tree reaches somewhere else entirely once frozen -- sometimes
+# still inside _internal/ (fixable with an extra flat datas entry, same
+# pattern as insightface), sometimes one level *above* _internal/, outside
+# anywhere a datas entry can reach at all (that shape needs the sd_cpp-style
+# runtime-hook treatment, or a post-build copy -- not attempted here).
+#
+# Swept every __file__-relative resource resolution under studio/backend/
+# (excluding tests/, never shipped) for this task's fix round 3. Findings and
+# what's fixed here vs. reported-only are in packaging's task-4-report.md;
+# summary of what's fixed below.
+
+# routes/preview.py's _PREVIEW_PAGE_HTML does
+# (Path(__file__).resolve().parent.parent / "assets" / "preview_page.html").read_text(...)
+# at MODULE LEVEL -- this is the confirmed startup crash. Frozen, parent.parent
+# from _internal/routes/preview.py lands on _internal/ (flat), not
+# _internal/studio/backend/ (nested, where the datas entry above places
+# studio/backend/assets/). Same flat "assets" destination also fixes three
+# further, non-crashing but real functional gaps found in the sweep, all
+# reading paths built the same way, all lazy (inside a function, not at
+# import time, so none of them crash startup on their own -- confirmed by
+# reading each call site before relying on that):
+#   - core/inference/chat_templates.py's _ASSETS_DIR (assets/chat_templates/)
+#   - utils/inference/inference_config.py's inference_defaults.json and
+#     assets/configs/model_defaults/ lookups
+#   - utils/models/model_config.py's assets/configs/model_defaults/ lookup
+# Keeping the nested "studio/backend/assets" entry above too, on the
+# insightface precedent: a second consumer using the dev-mode-style nested
+# path (Path(__file__).parent-relative, not sys._MEIPASS-relative) could
+# exist without having been traced by this sweep.
+datas.append((str(BACKEND / "assets"), "assets"))
+
+# utils/native_tls.py's _VENDOR_DIR (str(Path(__file__).resolve().parent.parent
+# / "vendor")) is the same flat-vs-nested mismatch, for the vendored
+# `truststore` package activate_native_tls() puts on sys.path. Only add the
+# flat copy if vendor/ exists at all (mirrors the optional-loop guard above).
+if (BACKEND / "vendor").is_dir():
+    datas.append((str(BACKEND / "vendor"), "vendor"))
+
+# core/inference/tools.py's _SANDBOX_SITE_DIR (placed on a sandboxed child
+# process's PYTHONPATH for the code-interpreter tool) and
+# core/data_recipe/local_callable_validators.py's _OXC_TOOL_DIR (the OXC
+# JS/TS validator, invoked via `node validate.mjs`) both use a SINGLE
+# Path(__file__).parent -- their own containing directory, not a multi-parent
+# chain -- so dev and frozen resolution agree with each other (both land on
+# "wherever core/inference/ or core/data_recipe/ ends up"). The bug for these
+# two is different: neither directory is bundled via ANY datas entry at all
+# yet (core/inference/*.py and core/data_recipe/*.py are pure-Python and get
+# compiled into the PYZ rather than kept as loose files, but sandbox_site/ and
+# oxc-validator/ hold non-.py payloads -- a sitecustomize.py shim a *subprocess*
+# needs to find as a real file, and a .mjs script Node.js must read directly --
+# that Analysis never collects on its own). Both are small (tens of KB); add
+# them at the nested destination matching their single-parent frozen
+# resolution (_internal/core/inference/sandbox_site,
+# _internal/core/data_recipe/oxc-validator).
+_sandbox_site = BACKEND / "core" / "inference" / "sandbox_site"
+if _sandbox_site.is_dir():
+    datas.append((str(_sandbox_site), "core/inference/sandbox_site"))
+else:
+    print(f"[Unslothed.spec] sandbox_site not found at {_sandbox_site}, skipping")
+
+_oxc_validator = BACKEND / "core" / "data_recipe" / "oxc-validator"
+if _oxc_validator.is_dir():
+    datas.append((str(_oxc_validator), "core/data_recipe/oxc-validator"))
+else:
+    print(f"[Unslothed.spec] oxc-validator not found at {_oxc_validator}, skipping")
+
 # torch and its CUDA payload are copied wholesale rather than analysed. Torch
 # loads extensions dynamically and ships CUDA DLLs that static analysis never
 # sees; letting PyInstaller try produces a build that imports and then fails
