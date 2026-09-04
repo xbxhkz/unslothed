@@ -12,7 +12,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 # SPECPATH is the directory holding this file: <repo>/packaging. One .parent
 # reaches the repo root. A second .parent (as an earlier draft of this file
@@ -166,6 +166,20 @@ hiddenimports = [
 ]
 hiddenimports += collect_submodules("core.inference.assist_vision")
 hiddenimports += collect_submodules("core.inference.assist_code")
+
+# insightface ships its own non-.py data under its package tree (notably
+# data/objects/meanshape_68.pkl, read by model_zoo/landmark.py's Landmark
+# class via insightface/data/pickle_object.py's get_object() -- a helper that
+# is itself PyInstaller-aware, branching on `sys.frozen`/`sys._MEIPASS`, which
+# is a strong signal upstream expects exactly this kind of freeze). cv2,
+# onnxruntime and ultralytics all get their data files collected automatically
+# because pyinstaller-hooks-contrib ships hooks for them; it ships none for
+# insightface, so without this explicit collection those files are silently
+# absent from the bundle. face_swap.py's _get_analyzer() calls
+# FaceAnalysis(name=_MODEL_PACK_NAME, ...) with no allowed_modules
+# restriction, which loads the landmark_3d_68 submodel and therefore this
+# exact file on first real use -- not a hypothetical, a reachable runtime path.
+datas += collect_data_files("insightface")
 
 a = Analysis(
     [str(ENTRY)],

@@ -69,7 +69,18 @@ Write-Step "Ensuring PyInstaller is installed in the build venv"
 # the shipped app, and removable afterwards. ~5 MB. Installing here (rather
 # than relying on a prior manual `pip install pyinstaller`) means this script
 # is reproducible from a clean venv, not just from this machine's current state.
-& $VenvPython -m pip show pyinstaller *> $null
+#
+# The existence probes below redirect stdout only (`1>`), not stderr. That is
+# deliberate, not an oversight: under $ErrorActionPreference = "Stop", Windows
+# PowerShell converts a native command's stderr output into a terminating
+# error the instant it is redirected with `2>` or `*>` -- even when the target
+# is $null -- so `pip show <absent-package>` (which prints a WARNING to
+# stderr and exits 1) aborts the whole script before the `if ($LASTEXITCODE)`
+# check below ever runs, despite the redirection. Leaving stderr unredirected
+# sidesteps that conversion entirely: the WARNING prints (harmless, and
+# expected on a clean venv's first run) and $LASTEXITCODE comes through
+# intact for the branch that follows.
+& $VenvPython -m pip show pyinstaller 1> $null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  installing pyinstaller into the venv"
     & $VenvPython -m pip install pyinstaller
@@ -81,7 +92,7 @@ if ($LASTEXITCODE -ne 0) {
 # never follows. Without pyinstaller-hooks-contrib those data files are
 # silently absent from the bundle -- the same missing-payload shape as the
 # torch problem, one layer down.
-& $VenvPython -m pip show pyinstaller-hooks-contrib *> $null
+& $VenvPython -m pip show pyinstaller-hooks-contrib 1> $null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "  installing pyinstaller-hooks-contrib into the venv (hooks for cv2/onnxruntime/ultralytics)"
     & $VenvPython -m pip install pyinstaller-hooks-contrib
