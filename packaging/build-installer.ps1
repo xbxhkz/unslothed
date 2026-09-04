@@ -48,7 +48,14 @@ $dist = Join-Path $Root "studio\frontend\dist\index.html"
 if (-not (Test-Path $dist)) { Fail "frontend build produced no dist/index.html" }
 
 Write-Step "Resolving version"
-$Version = (git -C $Root describe --tags --always 2>$null)
+# No `2>` here -- same reasoning as the `pip show` probes below: under
+# $ErrorActionPreference = "Stop", redirecting a native command's stderr (even
+# to $null) converts it into a terminating error, independent of exit code.
+# `--always` means this practically never writes to stderr (it falls back to
+# a short SHA instead of failing when there are no tags), but relying on that
+# is exactly the kind of "doesn't reproduce today" gap that bit the probes
+# below; leaving stderr unredirected is what actually makes this safe.
+$Version = (git -C $Root describe --tags --always)
 if (-not $Version) { $Version = "0.0.0" }
 $Version = $Version -replace '[^0-9A-Za-z.\-]', ''
 Write-Host "  version: $Version"

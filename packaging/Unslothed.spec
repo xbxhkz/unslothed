@@ -181,6 +181,64 @@ hiddenimports += collect_submodules("core.inference.assist_code")
 # exact file on first real use -- not a hypothetical, a reachable runtime path.
 datas += collect_data_files("insightface")
 
+# The collect_data_files() call above is NOT sufficient on its own -- found
+# and confirmed with a standalone PyInstaller 6.20.0 onedir probe build
+# (mirroring get_object()'s exact logic) after the first attempt at this fix
+# turned out to still be broken. insightface/data/pickle_object.py's
+# get_object() branches on sys.frozen: when true it reads from
+# <sys._MEIPASS>/objects/<name>.pkl -- FLAT, directly under the frozen app's
+# root -- not the package-nested <sys._MEIPASS>/insightface/data/objects/
+# path collect_data_files() produces (that nested layout only serves
+# get_object()'s *unfrozen* branch, Path(__file__).parent). Without this
+# second, flat copy, the file collect_data_files() placed is real but at a
+# path get_object() never looks at when frozen, so Landmark still gets
+# mean_lmk=None. Kept collect_data_files() above too, in case some other
+# insightface internal uses the unfrozen-style nested lookup even when frozen.
+_insightface_spec = importlib.util.find_spec("insightface")
+if _insightface_spec and _insightface_spec.submodule_search_locations:
+    _insightface_root = Path(list(_insightface_spec.submodule_search_locations)[0])
+    _insightface_objects = _insightface_root / "data" / "objects"
+    if _insightface_objects.is_dir():
+        datas.append((str(_insightface_objects), "objects"))
+        print(f"[Unslothed.spec] copying insightface objects flat from {_insightface_objects}")
+    else:
+        print(f"[Unslothed.spec] insightface data/objects not found at {_insightface_objects}, skipping flat copy")
+else:
+    print("[Unslothed.spec] insightface package spec not found, skipping flat objects copy")
+
+# core/inference/sd_cpp_backend.py's _installer_module() does
+# sys.path.insert(0, studio_dir) at runtime and then `import
+# install_sd_cpp_prebuilt` -- a local script at studio/install_sd_cpp_prebuilt.py,
+# not a pip package. The path is added at runtime, so Analysis's static walk
+# never sees this import and nothing above covers it: same unbundled-payload
+# shape as insightface's data files, one level up (a whole file instead of a
+# package's data). Every call site catches the resulting ModuleNotFoundError
+# and fails open (ensure_sd_cpp_binary returns None, falls back to diffusers),
+# so this does not crash -- but on a CPU-only install, or with
+# UNSLOTH_DIFFUSION_ENGINE=sd_cpp, GGUF-format diffusion models silently and
+# permanently lose the native engine. Sibling scripts under studio/ (audited:
+# install_llama_prebuilt.py, install_whisper_prebuilt.py, install_manifest.py,
+# install_python_stack.py, install_node_prebuilt.py) are invoked via
+# subprocess + a filesystem search, not this sys.path.insert+import pattern,
+# so they are not the same bug -- only this one is.
+#
+# This datas entry alone does NOT fix it -- confirmed with the same
+# standalone PyInstaller 6.20.0 onedir probe that caught the insightface gap
+# above. _installer_module() computes studio_dir as
+# Path(__file__).resolve().parents[3], which in the dev tree lands on
+# studio/ (four levels up from studio/backend/core/inference/<file>.py). In a
+# PyInstaller 6.x onedir frozen build it does not: frozen modules get a
+# synthetic __file__ rooted at sys._MEIPASS (the _internal/ folder), so
+# parents[3] from _internal/core/inference/<file>.py lands one level ABOVE
+# _internal -- the top-level onedir folder next to Unslothed.exe -- while
+# this datas entry (like every datas entry) lands inside _internal/studio/,
+# per PyInstaller's COLLECT convention that nothing but the exe itself can be
+# placed outside _internal/. The two paths never meet, so a datas entry by
+# itself cannot close this gap; see hook_runtime_sd_cpp_installer.py below,
+# which does, by putting the correct directory on sys.path before
+# _installer_module() runs its own (here, harmless-but-wrong) insert.
+datas.append((str(ROOT / "studio" / "install_sd_cpp_prebuilt.py"), "studio"))
+
 a = Analysis(
     [str(ENTRY)],
     pathex = [str(ROOT), str(BACKEND)],
@@ -188,7 +246,11 @@ a = Analysis(
     datas = datas,
     hiddenimports = hiddenimports,
     hookspath = [],
-    runtime_hooks = [],
+    # See hook_runtime_sd_cpp_installer.py's own header comment: this is what
+    # actually closes the sd_cpp installer-script gap described above the
+    # datas.append() near the top of this file -- the datas entry alone is
+    # not sufficient in a PyInstaller 6.x onedir build.
+    runtime_hooks = [str(Path(SPECPATH).resolve() / "hook_runtime_sd_cpp_installer.py")],
     # Excluded because they are copied in via `datas` above. Leaving them in
     # Analysis doubles the build time and produces a broken CUDA payload.
     excludes = ["torch", "torchvision", "nvidia", "functorch", "torchgen"],
