@@ -22,6 +22,7 @@ if _BACKEND_DIR not in sys.path:
 
 from routes.draft_model import (
     VERDICT_MISSING,
+    VERDICT_NO_TARGET,
     VERDICT_OK,
     VERDICT_OUTSIDE,
     validate_choice,
@@ -51,6 +52,20 @@ class TestExistence:
         assert v.size_bytes == 4096, "size must be reported so the UI can warn before a 409"
 
 
+class TestNoTarget:
+    def test_a_local_choice_with_no_target_is_rejected_not_silently_unconfined(self, tmp_path):
+        """With no target there is nothing to confine against, so an unconfined
+        pass would accept any file on disk."""
+        draft = _fake_gguf(tmp_path / "anywhere" / "d.gguf")
+        v = validate_choice(None, ("local", str(draft)))
+        assert not v.ok
+        assert v.reason == VERDICT_NO_TARGET
+
+    def test_a_remote_choice_with_no_target_is_still_fine(self, tmp_path):
+        v = validate_choice(None, ("hf", "unsloth/Qwen3-0.6B-GGUF"))
+        assert v.ok
+
+
 class TestConfinement:
     def test_a_drafter_outside_the_target_tree_is_rejected(self, tmp_path):
         target = _fake_gguf(tmp_path / "models" / "target.gguf")
@@ -78,6 +93,20 @@ class TestConfinement:
             pytest.skip("symlinks unavailable (Windows without developer mode)")
         v = validate_choice(str(target), ("local", str(link)))
         assert not v.ok, "a symlink out of the tree must not be admitted"
+        assert v.reason == VERDICT_OUTSIDE
+
+    def test_control_a_dotdot_traversal_escape_is_rejected(self, tmp_path):
+        """Portable twin of the symlink control. `relative_to` on an UNRESOLVED
+        path succeeds here -- the component list ['...','models','..','elsewhere']
+        has ['...','models'] as a lexical prefix -- so without `.resolve()` this
+        escaping path reads as confined. Verified against CPython's pathlib.
+        """
+        target = _fake_gguf(tmp_path / "models" / "target.gguf")
+        outside = _fake_gguf(tmp_path / "elsewhere" / "secret.gguf")
+        sneaky = tmp_path / "models" / ".." / "elsewhere" / "secret.gguf"
+        assert Path(sneaky).exists(), "fixture must exist, or MISSING would mask OUTSIDE"
+        v = validate_choice(str(target), ("local", str(sneaky)))
+        assert not v.ok
         assert v.reason == VERDICT_OUTSIDE
 
 
