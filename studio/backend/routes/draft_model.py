@@ -291,3 +291,89 @@ def _skip_value(f, vtype: int) -> bool:
         f.seek(sz * alen, os.SEEK_CUR)
         return True
     return False
+
+
+from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
+
+from auth.authentication import get_current_subject
+from loggers import get_logger
+
+router = APIRouter()
+logger = get_logger(__name__)
+
+
+class ChoiceIn(BaseModel):
+    kind: str
+    ref: str
+
+
+class SelectIn(BaseModel):
+    model_path: Optional[str] = None
+    existing_args: list[str] = []
+    choice: Optional[ChoiceIn] = None
+
+
+@router.get("/candidates")
+def list_candidates(
+    model_path: str = Query("", max_length = 4096),
+    current_subject: str = Depends(get_current_subject),
+) -> dict:
+    """Drafters selectable for ``model_path``.
+
+    Colocated GGUFs only. The target itself is excluded: a model cannot draft
+    for itself, and offering it invites a load that wastes VRAM on a second
+    copy of the same weights.
+    """
+    out: list[dict] = []
+    if model_path:
+        target = _resolve_real(model_path)
+        if target.parent.is_dir():
+            for f in sorted(target.parent.glob("*.gguf")):
+                if _resolve_real(str(f)) == target:
+                    continue
+                out.append({
+                    "kind": "local",
+                    "ref": str(f),
+                    "label": f.name,
+                    "source": "sidecar" if _looks_like_sidecar(f.name) else "local",
+                })
+    return {"candidates": out}
+
+
+def _looks_like_sidecar(name: str) -> bool:
+    """Whether auto-discovery would treat this as a drafter sidecar. Labelling
+    only -- it changes how the entry is presented, never whether it is offered,
+    so a naming convention that drifts upstream cannot hide a valid choice."""
+    low = name.lower()
+    return low.startswith(("mtp-", "dspark-", "dflash-")) or "-mtp-" in low
+
+
+@router.post("/select")
+def select_draft_model(
+    payload: SelectIn,
+    current_subject: str = Depends(get_current_subject),
+) -> dict:
+    """Validate a choice and return the llama_extra_args that pin it.
+
+    A rejected choice is a 200 carrying a verdict, not an error status: the UI
+    renders the reason inline next to the picker, and an HTTP error would make
+    a normal, expected outcome look like a fault.
+    """
+    if payload.choice is None:
+        return {
+            "ok": True, "reason": VERDICT_OK, "detail": "",
+            "size_bytes": None, "vocab_target": None, "vocab_draft": None,
+            "llama_extra_args": compose_draft_args(payload.existing_args, None),
+        }
+    verdict = validate_choice(payload.model_path, (payload.choice.kind, payload.choice.ref))
+    args = (
+        compose_draft_args(payload.existing_args, (payload.choice.kind, payload.choice.ref))
+        if verdict.ok else None
+    )
+    return {
+        "ok": verdict.ok, "reason": verdict.reason, "detail": verdict.detail,
+        "size_bytes": verdict.size_bytes,
+        "vocab_target": verdict.vocab_target, "vocab_draft": verdict.vocab_draft,
+        "llama_extra_args": args,
+    }
