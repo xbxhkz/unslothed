@@ -1,0 +1,50 @@
+# Build context exclusions for the Unslothed images.
+#
+# This file is load-bearing, not hygiene. packaging/dist alone is ~4 GB of
+# PyInstaller output and packaging/Output holds a 1.91 GB installer; without
+# these lines every `docker build` uploads them to the daemon before running a
+# single instruction, on both tags, on every rebuild.
+
+# --- packaging output (the expensive ones) ---
+packaging/dist/
+packaging/build/
+packaging/Output/
+packaging/__pycache__/
+packaging/unsloth_compiled_cache/
+
+# --- VCS and IDE ---
+.git/
+.github/
+.gitignore
+.vscode/
+.idea/
+.superpowers/
+
+# --- Python build/runtime droppings ---
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+unsloth_compiled_cache/
+
+# --- Node ---
+# node_modules is reinstalled by `npm ci` inside the frontend stage; copying the
+# host's (Windows, and ~1 GB) would be both wrong and slow.
+**/node_modules/
+studio/frontend/dist/
+
+# --- Rust / Tauri shell (not part of either image) ---
+studio/src-tauri/target/
+
+# --- tests and local scratch ---
+**/.DS_Store
+*.log
+*.tmp
