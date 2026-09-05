@@ -84,3 +84,74 @@ def compose_draft_args(
     kind, ref = choice
     flag = _CANONICAL_HF_FLAG if kind == "hf" else _CANONICAL_LOCAL_FLAG
     return args + [flag, str(ref)]
+
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+VERDICT_OK = "ok"
+VERDICT_MISSING = "missing"
+VERDICT_OUTSIDE = "outside_permitted_directory"
+VERDICT_VOCAB_MISMATCH = "vocab_mismatch"
+VERDICT_VOCAB_UNKNOWN = "vocab_unknown"
+
+
+@dataclass
+class DraftVerdict:
+    ok: bool
+    reason: str
+    detail: str = ""
+    size_bytes: Optional[int] = None
+    vocab_target: Optional[int] = None
+    vocab_draft: Optional[int] = None
+
+
+def _resolve_real(p: str) -> Path:
+    """Fully resolved path. `.resolve()` is what makes the confinement check
+    survive a symlink pointing out of the tree; a string-prefix test on the
+    unresolved path admits exactly that escape."""
+    return Path(p).resolve()
+
+
+def _is_confined(target: Path, draft: Path) -> bool:
+    """A pinned local drafter must live in the target's directory tree.
+
+    Same rule auto-discovery obeys implicitly by only ever considering
+    colocated files, made explicit here because pinning can name anything.
+    """
+    root = target.parent
+    try:
+        draft.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def validate_choice(target_path: Optional[str], choice: DraftChoice) -> DraftVerdict:
+    """Whether ``choice`` is a usable drafter for ``target_path``.
+
+    Remote repositories skip the local filesystem checks: there is no path to
+    resolve and the load path prices them from their own listing.
+    """
+    kind, ref = choice
+    if kind == "hf":
+        return DraftVerdict(ok = True, reason = VERDICT_OK, detail = str(ref))
+
+    draft = _resolve_real(str(ref))
+    if not draft.is_file():
+        return DraftVerdict(
+            ok = False, reason = VERDICT_MISSING,
+            detail = f"no file at {ref}",
+        )
+    if target_path:
+        target = _resolve_real(target_path)
+        if not _is_confined(target, draft):
+            return DraftVerdict(
+                ok = False, reason = VERDICT_OUTSIDE,
+                detail = f"{draft.name} is outside {target.parent}",
+            )
+    return DraftVerdict(
+        ok = True, reason = VERDICT_OK, detail = draft.name,
+        size_bytes = draft.stat().st_size,
+    )
