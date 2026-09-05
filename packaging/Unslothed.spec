@@ -146,6 +146,43 @@ if _oxc_validator.is_dir():
 else:
     print(f"[Unslothed.spec] oxc-validator not found at {_oxc_validator}, skipping")
 
+# sqlite-vec's vec0 native library -- found by LAUNCHING the exe (fix round 3)
+# and reading stderr, not by any bundle-contents check:
+#
+#   RAG unavailable: sqlite-vec extension could not be loaded;
+#   RAG features are disabled for this session (The specified module could not be found.)
+#
+# Note WHICH message that is. storage/rag_db.py:29-35 wraps `import sqlite_vec`
+# in a try/except that logs "could not be imported"; the line above is the
+# other one, from _warn_unavailable_once(), meaning the import SUCCEEDED and
+# conn.load_extension() failed. That distinction is the whole diagnosis: the
+# pure-Python sqlite_vec package is compiled into the PYZ (so it imports fine
+# and appears nowhere on disk -- a file search for it returns nothing, which
+# reads as "not bundled" and is misleading), while vec0.dll is package DATA
+# that Analysis does not collect. Module present, payload absent: exactly the
+# insightface shape from fix round 2.
+#
+# sqlite_vec.loadable_path() is path.join(path.dirname(__file__), "vec0"), and
+# a PYZ module's synthetic __file__ is _MEIPASS/sqlite_vec/__init__.py, so the
+# DLL must land in a "sqlite_vec" directory specifically -- SQLite appends the
+# platform suffix (.dll) to the extensionless path itself.
+#
+# Failure mode without this: RAG (knowledge bases, hybrid retrieval,
+# conversation archive) is silently off in the shipped installer while working
+# in the dev tree, because the venv has the DLL. rag_db warns once and every
+# caller degrades quietly by design -- so nothing surfaces it except reading
+# startup stderr.
+try:
+    import sqlite_vec as _sqlite_vec_probe
+    _vec0 = Path(_sqlite_vec_probe.__file__).parent / "vec0.dll"
+    if _vec0.is_file():
+        datas.append((str(_vec0), "sqlite_vec"))
+    else:
+        print(f"[Unslothed.spec] sqlite-vec present but vec0.dll missing at {_vec0}; "
+              "RAG will be disabled in the build")
+except Exception as _exc:  # noqa: BLE001 - optional dep, mirrors rag_db.py's own guard
+    print(f"[Unslothed.spec] sqlite_vec not importable ({_exc}); RAG will be disabled in the build")
+
 # torch and its CUDA payload are copied wholesale rather than analysed. Torch
 # loads extensions dynamically and ships CUDA DLLs that static analysis never
 # sees; letting PyInstaller try produces a build that imports and then fails
