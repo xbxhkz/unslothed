@@ -115,3 +115,81 @@ class TestRemote:
         target = _fake_gguf(tmp_path / "target.gguf")
         v = validate_choice(str(target), ("hf", "unsloth/Qwen3-0.6B-GGUF"))
         assert v.reason not in (VERDICT_MISSING, VERDICT_OUTSIDE)
+
+
+import struct
+
+from routes.draft_model import (
+    VERDICT_VOCAB_MISMATCH,
+    VERDICT_VOCAB_UNKNOWN,
+    read_gguf_vocab_size,
+)
+
+_GGUF_MAGIC = 0x46554747
+_TYPE_ARRAY = 9
+_TYPE_STRING = 8
+
+
+def _write_gguf_with_vocab(path: Path, n_tokens: int) -> Path:
+    """A minimal but REAL GGUF header whose tokenizer.ggml.tokens array has
+    ``n_tokens`` entries. Built rather than mocked: the parser under test reads
+    bytes, so a mock would test nothing about the parsing."""
+    path.parent.mkdir(parents = True, exist_ok = True)
+    key = b"tokenizer.ggml.tokens"
+    body = struct.pack("<IIQQ", _GGUF_MAGIC, 3, 0, 1)
+    body += struct.pack("<Q", len(key)) + key
+    body += struct.pack("<I", _TYPE_ARRAY)
+    body += struct.pack("<I", _TYPE_STRING)
+    body += struct.pack("<Q", n_tokens)
+    for i in range(n_tokens):
+        tok = f"t{i}".encode()
+        body += struct.pack("<Q", len(tok)) + tok
+    path.write_bytes(body)
+    return path
+
+
+class TestVocabulary:
+    def test_vocab_size_is_read_from_the_token_array_length(self, tmp_path):
+        g = _write_gguf_with_vocab(tmp_path / "m.gguf", 7)
+        assert read_gguf_vocab_size(str(g)) == 7
+
+    def test_a_non_gguf_file_reads_as_unknown_not_zero(self, tmp_path):
+        p = tmp_path / "not.gguf"
+        p.write_bytes(b"\0" * 512)
+        assert read_gguf_vocab_size(str(p)) is None
+
+    def test_matching_vocabularies_pass(self, tmp_path):
+        t = _write_gguf_with_vocab(tmp_path / "m" / "target.gguf", 32)
+        d = _write_gguf_with_vocab(tmp_path / "m" / "draft.gguf", 32)
+        v = validate_choice(str(t), ("local", str(d)))
+        assert v.ok
+        assert v.vocab_target == 32 and v.vocab_draft == 32
+
+    def test_mismatched_vocabularies_are_rejected(self, tmp_path):
+        t = _write_gguf_with_vocab(tmp_path / "m" / "target.gguf", 32)
+        d = _write_gguf_with_vocab(tmp_path / "m" / "draft.gguf", 64)
+        v = validate_choice(str(t), ("local", str(d)))
+        assert not v.ok
+        assert v.reason == VERDICT_VOCAB_MISMATCH
+        assert "32" in v.detail and "64" in v.detail
+
+    def test_an_unreadable_vocabulary_is_reported_not_silently_passed(self, tmp_path):
+        """Fail visibly. A silent pass here is the exact shape of the
+        sqlite-vec and update_flow.py defects this project has already paid
+        for: a feature that quietly does not work."""
+        t = _write_gguf_with_vocab(tmp_path / "m" / "target.gguf", 32)
+        d = _fake_gguf(tmp_path / "m" / "draft.gguf")   # not a GGUF
+        v = validate_choice(str(t), ("local", str(d)))
+        assert v.reason == VERDICT_VOCAB_UNKNOWN
+        assert not v.ok
+
+    # --- negative control --------------------------------------------------
+    def test_control_the_vocab_gate_fires_on_its_own(self, tmp_path):
+        """The mismatched pair must pass existence, confinement and size, so a
+        VOCAB_MISMATCH verdict cannot be a neighbouring check misfiring."""
+        t = _write_gguf_with_vocab(tmp_path / "m" / "target.gguf", 32)
+        d = _write_gguf_with_vocab(tmp_path / "m" / "draft.gguf", 64)
+        assert d.is_file()                              # existence would pass
+        assert d.parent == Path(str(t)).parent          # confinement would pass
+        v = validate_choice(str(t), ("local", str(d)))
+        assert v.reason == VERDICT_VOCAB_MISMATCH

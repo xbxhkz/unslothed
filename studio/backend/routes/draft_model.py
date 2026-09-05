@@ -157,7 +157,102 @@ def validate_choice(target_path: Optional[str], choice: DraftChoice) -> DraftVer
             ok = False, reason = VERDICT_OUTSIDE,
             detail = f"{draft.name} is outside {target.parent}",
         )
+    size_bytes = draft.stat().st_size
+    v_target = read_gguf_vocab_size(str(target))
+    v_draft = read_gguf_vocab_size(str(draft))
+    if v_target is None or v_draft is None:
+        return DraftVerdict(
+            ok = False, reason = VERDICT_VOCAB_UNKNOWN,
+            detail = "could not read the vocabulary from one of the files",
+            size_bytes = size_bytes, vocab_target = v_target, vocab_draft = v_draft,
+        )
+    if v_target != v_draft:
+        return DraftVerdict(
+            ok = False, reason = VERDICT_VOCAB_MISMATCH,
+            detail = f"target vocabulary is {v_target}, drafter is {v_draft}",
+            size_bytes = size_bytes, vocab_target = v_target, vocab_draft = v_draft,
+        )
     return DraftVerdict(
         ok = True, reason = VERDICT_OK, detail = draft.name,
-        size_bytes = draft.stat().st_size,
+        size_bytes = size_bytes, vocab_target = v_target, vocab_draft = v_draft,
     )
+
+
+import struct
+
+_GGUF_MAGIC = 0x46554747  # b"GGUF" LE u32
+_VOCAB_KEY = b"tokenizer.ggml.tokens"
+_TYPE_ARRAY = 9
+
+# Byte widths of the fixed-size GGUF value types, indexed by type id. Mirrors
+# _FIXED_VTYPE_SIZES in utils/models/gguf_metadata.py; kept local so this module
+# depends on one upstream private set (the draft flags) rather than two.
+_FIXED_VTYPE_SIZES = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
+
+
+def read_gguf_vocab_size(path: str) -> Optional[int]:
+    """Token count from ``tokenizer.ggml.tokens``, or None when unreadable.
+
+    The array LENGTH is the vocabulary size: many GGUFs carry no vocab_size
+    key, which is the same approach the loader itself takes. Only the length is
+    read -- the tokens are skipped without being materialised, so a six-figure
+    vocabulary costs no memory.
+
+    Returns None rather than 0 for "could not determine". Callers must treat
+    None as unknown and say so; a 0 would compare equal to another 0 and
+    silently admit a mismatched pair.
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(24)
+            if len(head) < 24:
+                return None
+            magic, _version, _tcount, kv_count = struct.unpack("<IIQQ", head)
+            if magic != _GGUF_MAGIC:
+                return None
+            for _ in range(kv_count):
+                raw = f.read(8)
+                if len(raw) < 8:
+                    return None
+                (klen,) = struct.unpack("<Q", raw)
+                key = f.read(klen)
+                vtype_raw = f.read(4)
+                if len(vtype_raw) < 4:
+                    return None
+                (vtype,) = struct.unpack("<I", vtype_raw)
+                if key == _VOCAB_KEY and vtype == _TYPE_ARRAY:
+                    atype_raw = f.read(4)
+                    alen_raw = f.read(8)
+                    if len(atype_raw) < 4 or len(alen_raw) < 8:
+                        return None
+                    (alen,) = struct.unpack("<Q", alen_raw)
+                    return int(alen)
+                if not _skip_value(f, vtype):
+                    return None
+    except (OSError, struct.error, ValueError):
+        return None
+    return None
+
+
+def _skip_value(f, vtype: int) -> bool:
+    """Advance past one GGUF value. False when the type is unknown, which ends
+    the walk rather than misreading the rest of the header."""
+    if vtype in _FIXED_VTYPE_SIZES:
+        return len(f.read(_FIXED_VTYPE_SIZES[vtype])) == _FIXED_VTYPE_SIZES[vtype]
+    if vtype == 8:  # string
+        raw = f.read(8)
+        if len(raw) < 8:
+            return False
+        (n,) = struct.unpack("<Q", raw)
+        f.seek(n, os.SEEK_CUR)
+        return True
+    if vtype == _TYPE_ARRAY:
+        head = f.read(12)
+        if len(head) < 12:
+            return False
+        atype, alen = struct.unpack("<IQ", head)
+        for _ in range(alen):
+            if not _skip_value(f, atype):
+                return False
+        return True
+    return False
