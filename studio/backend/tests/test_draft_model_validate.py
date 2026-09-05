@@ -193,3 +193,65 @@ class TestVocabulary:
         assert d.parent == Path(str(t)).parent          # confinement would pass
         v = validate_choice(str(t), ("local", str(d)))
         assert v.reason == VERDICT_VOCAB_MISMATCH
+
+
+class TestVocabularyParserRobustness:
+    """The path is user-named, so a hostile or corrupted file is in scope, not
+    just a well-formed non-GGUF. Each of these must degrade to ``None``
+    (unknown), never raise -- an uncaught exception here is a 500 the user
+    never asked for, and defeats the "returns None, not 0" contract this
+    module exists to uphold."""
+
+    def test_a_deeply_nested_array_does_not_blow_the_stack(self, tmp_path):
+        """~1200 nested single-element arrays, ~15 KB. Must return None, not raise."""
+        p = tmp_path / "nested.gguf"
+        key = b"x"
+        body = struct.pack("<IIQQ", _GGUF_MAGIC, 3, 0, 1)
+        body += struct.pack("<Q", len(key)) + key
+        depth = 1200
+        for _ in range(depth):
+            body += struct.pack("<I", 9)          # TYPE_ARRAY
+        body += struct.pack("<I", 8) + struct.pack("<Q", 0)
+        p.write_bytes(body)
+        assert read_gguf_vocab_size(str(p)) is None
+
+    def test_a_properly_encoded_deeply_nested_array_does_not_blow_the_stack(self, tmp_path):
+        """Same intent as the test above, but with a byte layout that actually
+        reaches the recursive branch under the pre-fix parser.
+
+        Verified by running against the pre-fix code: the test above, as
+        specified, writes only a 4-byte TYPE_ARRAY marker per nesting level,
+        omitting each level's 8-byte element count. `_skip_value`'s array
+        branch reads a 12-byte header per level (4-byte atype + 8-byte alen),
+        so that payload desyncs immediately -- two consecutive 4-byte markers
+        get reinterpreted as one 8-byte alen, and the very next recursive call
+        hits a short read and returns False before any real depth is reached.
+        Against the pre-fix parser it returned None without recursing, so it
+        does not exercise the stack-depth bug on its own.
+
+        This version writes a proper 12-byte (atype=ARRAY, alen=1) header per
+        level, which pre-fix actually recursed 1200 Python-call frames deep and
+        raised RecursionError (confirmed before applying the non-recursive
+        rewrite). Kept alongside the test above rather than replacing it: that
+        one still documents and guards the desync/truncation-on-malformed-input
+        path, which is a real, separate case worth keeping covered.
+        """
+        p = tmp_path / "nested_well_formed.gguf"
+        key = b"x"
+        body = struct.pack("<IIQQ", _GGUF_MAGIC, 3, 0, 1)
+        body += struct.pack("<Q", len(key)) + key
+        depth = 1200
+        body += struct.pack("<I", _TYPE_ARRAY)               # outer KV vtype
+        for _ in range(depth - 1):
+            body += struct.pack("<IQ", _TYPE_ARRAY, 1)       # atype=ARRAY, alen=1
+        body += struct.pack("<IQ", _TYPE_STRING, 0)          # innermost leaf
+        p.write_bytes(body)
+        assert read_gguf_vocab_size(str(p)) is None
+
+    def test_an_absurd_key_length_does_not_allocate(self, tmp_path):
+        """A 40-byte file declaring a ~16 EB key length. Must return None promptly."""
+        p = tmp_path / "huge.gguf"
+        body = struct.pack("<IIQQ", _GGUF_MAGIC, 3, 0, 1)
+        body += struct.pack("<Q", (1 << 64) - 1)
+        p.write_bytes(body)
+        assert read_gguf_vocab_size(str(p)) is None

@@ -189,6 +189,14 @@ _TYPE_ARRAY = 9
 # depends on one upstream private set (the draft flags) rather than two.
 _FIXED_VTYPE_SIZES = {0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8}
 
+# Sanity bounds mirroring utils/models/gguf_metadata.py's _parse_gguf_header /
+# _skip_gguf_value: the path is user-named, so a hostile file is in scope. A
+# key length or array/string length beyond these is never a real GGUF -- it is
+# either corruption or an attacker forcing a huge f.read() -- so the walk
+# aborts (returns None / False) rather than acting on the value.
+_MAX_KEY_LEN = 1 << 20  # 1 MB
+_MAX_LEN = 1 << 30  # 1 GB, applied to array element counts and string lengths
+
 
 def read_gguf_vocab_size(path: str) -> Optional[int]:
     """Token count from ``tokenizer.ggml.tokens``, or None when unreadable.
@@ -215,6 +223,8 @@ def read_gguf_vocab_size(path: str) -> Optional[int]:
                 if len(raw) < 8:
                     return None
                 (klen,) = struct.unpack("<Q", raw)
+                if klen > _MAX_KEY_LEN:
+                    return None
                 key = f.read(klen)
                 vtype_raw = f.read(4)
                 if len(vtype_raw) < 4:
@@ -229,14 +239,24 @@ def read_gguf_vocab_size(path: str) -> Optional[int]:
                     return int(alen)
                 if not _skip_value(f, vtype):
                     return None
-    except (OSError, struct.error, ValueError):
+    except (OSError, struct.error, ValueError, OverflowError, MemoryError, RecursionError):
         return None
     return None
 
 
 def _skip_value(f, vtype: int) -> bool:
-    """Advance past one GGUF value. False when the type is unknown, which ends
-    the walk rather than misreading the rest of the header."""
+    """Advance past one GGUF value. False when the type is unknown or a length
+    exceeds a sanity bound, which ends the walk rather than misreading the
+    rest of the header or acting on an attacker-controlled size.
+
+    Arrays are skipped WITHOUT recursion, mirroring _skip_gguf_value in
+    utils/models/gguf_metadata.py: a fixed-size element array is skipped with
+    one seek, a string array is skipped element-by-element inline, and a
+    nested array (or any other non-fixed-size element type) is not descended
+    into at all -- it cannot be tokenizer.ggml.tokens, so refusing to
+    recurse into it costs nothing real and a bounded number of stack frames
+    is spent regardless of how deeply a hostile file nests arrays.
+    """
     if vtype in _FIXED_VTYPE_SIZES:
         return len(f.read(_FIXED_VTYPE_SIZES[vtype])) == _FIXED_VTYPE_SIZES[vtype]
     if vtype == 8:  # string
@@ -244,6 +264,8 @@ def _skip_value(f, vtype: int) -> bool:
         if len(raw) < 8:
             return False
         (n,) = struct.unpack("<Q", raw)
+        if n > _MAX_LEN:
+            return False
         f.seek(n, os.SEEK_CUR)
         return True
     if vtype == _TYPE_ARRAY:
@@ -251,8 +273,21 @@ def _skip_value(f, vtype: int) -> bool:
         if len(head) < 12:
             return False
         atype, alen = struct.unpack("<IQ", head)
-        for _ in range(alen):
-            if not _skip_value(f, atype):
-                return False
+        if alen > _MAX_LEN:
+            return False
+        if atype == 8:  # array of strings: each has its own length to bound
+            for _ in range(alen):
+                raw = f.read(8)
+                if len(raw) < 8:
+                    return False
+                (n,) = struct.unpack("<Q", raw)
+                if n > _MAX_LEN:
+                    return False
+                f.seek(n, os.SEEK_CUR)
+            return True
+        sz = _FIXED_VTYPE_SIZES.get(atype)
+        if sz is None:
+            return False  # nested array or unknown element type: abort, don't descend
+        f.seek(sz * alen, os.SEEK_CUR)
         return True
     return False
