@@ -202,8 +202,15 @@ class TestVocabularyParserRobustness:
     never asked for, and defeats the "returns None, not 0" contract this
     module exists to uphold."""
 
-    def test_a_deeply_nested_array_does_not_blow_the_stack(self, tmp_path):
-        """~1200 nested single-element arrays, ~15 KB. Must return None, not raise."""
+    def test_a_desynced_array_header_returns_unknown(self, tmp_path):
+        """A truncated array header (4-byte type marker, missing the u64 count)
+        desyncs the walk. The parser must return None rather than misread the
+        remaining bytes.
+
+        NOTE: this does NOT exercise recursion depth -- the stream desyncs before
+        _skip_value can descend. test_a_properly_encoded_deeply_nested_array_does_
+        not_blow_the_stack is what covers that, with a correctly encoded payload.
+        """
         p = tmp_path / "nested.gguf"
         key = b"x"
         body = struct.pack("<IIQQ", _GGUF_MAGIC, 3, 0, 1)
