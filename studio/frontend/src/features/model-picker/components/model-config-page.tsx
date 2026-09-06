@@ -913,6 +913,7 @@ function GgufAdvancedSettings({
   update,
   modelId,
   ggufVariant,
+  extraArgsHydrating,
   showDraftTokens,
   speculativeFallback,
   onEditTemplate,
@@ -931,6 +932,12 @@ function GgufAdvancedSettings({
    * real local file, same as it does for that other fetch. */
   modelId: string;
   ggufVariant: string | null;
+  /** True until the stored llama_extra_args read below settles. The draft-model
+   * picker must not write while it is set: `config.llamaExtraArgs` is still
+   * `undefined` then, and the hydration guards read exactly that to decide
+   * whether the user has touched the field -- a pick landing first would make
+   * hydration discard the stored arguments it was about to apply. */
+  extraArgsHydrating: boolean;
   showDraftTokens: boolean;
   speculativeFallback: string;
   onEditTemplate: () => void;
@@ -1053,6 +1060,7 @@ function GgufAdvancedSettings({
         <DraftModelPicker
           modelId={modelId}
           ggufVariant={ggufVariant}
+          hydrating={extraArgsHydrating}
           speculativeType={config.speculativeType ?? speculativeFallback}
           existingArgs={config.llamaExtraArgs ?? []}
           onArgsChange={(args) =>
@@ -2374,6 +2382,7 @@ export function ModelConfigPage({
                 update={update}
                 modelId={target.id}
                 ggufVariant={target.ggufVariant ?? null}
+                extraArgsHydrating={extraArgsHydrating}
                 showDraftTokens={showDraftTokens}
                 speculativeFallback={speculativeFallback}
                 onEditTemplate={() => setTemplateOpen(true)}

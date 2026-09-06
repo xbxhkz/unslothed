@@ -15,6 +15,10 @@ import { authFetch } from "@/features/auth";
 
 export type DraftChoice = { kind: "local" | "hf"; ref: string } | null;
 
+/** Reasons the backend can send back that the picker treats specially. Kept as
+ *  constants so a rename on either side is one grep, not a silent miss. */
+export const VERDICT_UNVERIFIED = "unverified";
+
 export type DraftCandidate = {
   kind: string;
   ref: string;
@@ -43,6 +47,10 @@ export type SelectResult = {
 export type DraftCandidatesResult = {
   candidates: DraftCandidate[];
   resolved: boolean;
+  /** False when the request itself failed (non-2xx, unparsable body). Distinct
+   *  again from `resolved`: the backend never answered, so nothing at all is
+   *  known about this model -- not even that it could not be resolved. */
+  ok: boolean;
 };
 
 export async function fetchDraftCandidates(
@@ -59,13 +67,69 @@ export async function fetchDraftCandidates(
   const url = `/api/draft-model/candidates?${params.toString()}`;
   const res = await authFetch(url);
   if (!res.ok) {
-    return { candidates: [], resolved: true };
+    // NOT `resolved: true`. That claimed the backend had looked and found
+    // nothing, so every backend or proxy error rendered as the one message
+    // this feature went out of its way to make distinguishable ("No colocated
+    // drafters found") -- the third site in this branch with that defect.
+    return { candidates: [], resolved: false, ok: false };
   }
   const body = await res.json().catch(() => null);
+  if (body === null) {
+    return { candidates: [], resolved: false, ok: false };
+  }
   return {
     candidates: Array.isArray(body?.candidates) ? body.candidates : [],
     resolved: Boolean(body?.resolved),
+    ok: true,
   };
+}
+
+/** What `existingArgs` currently pins, as the backend reads it. */
+export type CurrentPinResult = {
+  pin: { kind: "local" | "hf"; ref: string } | null;
+  /** False when the request failed. The picker must not seed "Automatic" off a
+   *  failed read -- that is indistinguishable from a genuine no-pin answer and
+   *  is how a pinned model came to render as unpinned. */
+  ok: boolean;
+};
+
+/**
+ * The pinned drafter behind an argument list.
+ *
+ * This exists so the picker never parses llama-server flags itself. The
+ * vocabulary is seven spellings in two families, each in `-f v` and `-f=v`
+ * form, with `_` normalised to `-`; the backend already owns that parser, and
+ * a second one here is exactly what this module's header says it will not do.
+ * A hand-rolled reader was written once anyway, recognised two spellings, and
+ * displayed "Automatic" for a model that was pinned.
+ *
+ * POST because the input is an argument list, not an identifier.
+ */
+export async function fetchCurrentDraftPin(
+  existingArgs: string[],
+): Promise<CurrentPinResult> {
+  const res = await authFetch("/api/draft-model/current", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      // biome-ignore lint/style/useNamingConvention: API schema
+      existing_args: existingArgs,
+    }),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok || body === null) {
+    return { pin: null, ok: false };
+  }
+  const pin = body?.pin;
+  if (
+    pin &&
+    (pin.kind === "local" || pin.kind === "hf") &&
+    typeof pin.ref === "string" &&
+    pin.ref !== ""
+  ) {
+    return { pin: { kind: pin.kind, ref: pin.ref }, ok: true };
+  }
+  return { pin: null, ok: true };
 }
 
 export async function selectDraftModel(

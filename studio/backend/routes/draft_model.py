@@ -23,13 +23,37 @@ together -- the shape of the unpinned-dependency failure this project has
 already paid for once. The sets are imported, never retyped; tests/
 test_draft_model_compose.py pins their names so an upstream rename fails there.
 
-Known limitation: a pinned drafter that is later deleted fails OPEN at load
+READING a pin back is the same problem, so it is answered the same way: the
+/current endpoint below hands the frontend the pinned choice as structured
+data. The picker never inspects ``llama_extra_args`` itself -- an earlier
+revision did, recognised two spellings out of seven, and reported a pinned
+model as "Automatic" for the other five. One parser, here, is the whole point
+of the module.
+
+Known limitation 1: a pinned drafter that is later deleted fails OPEN at load
 time. routes/inference.py treats a local --model-draft that is not on disk as
 "no drafter loads and none is charged", so speculation silently reverts to
 none. The picker re-validates when it opens and marks a missing pin, but that
 only covers the UI path. Closing this properly means editing the upstream load
 path, which this sub-project's seam budget (one router-registration line)
 deliberately declines. Revisit if the seam constraint is ever relaxed.
+
+Known limitation 2, and it is MORE reachable than the one above: a saved pin is
+silently STRIPPED on two of the three load paths. Upstream treats every
+drafter-naming flag as shadowing the first-class ``speculative_type`` field --
+_SPEC_FLAGS at core/inference/llama_server_args.py:514-546 lists all seven --
+and ``strip_shadowing_flags(..., strip_spec = "speculative_type" in ...)`` is
+applied to stored/inherited extras at utils/openai_auto_switch_settings.py:686
+and routes/inference.py:7993. So a pin survives a Run Settings load that sends
+no speculative_type, but an auto-switch load, an idle reload, or a chat-settings
+Apply -- each of which does send one -- drops the pin and silently reverts to
+auto-discovery. The picker still shows the pin, because it is still in the
+saved arguments; only that particular load ignored it. Upstream's reasoning is
+sound for ITS drafters (an inherited copy must not last-wins-override the
+auto-detected one); it simply predates a user-chosen pin being a thing. Closing
+it means teaching those two call sites to distinguish a UI-managed pin from an
+inherited leftover -- an edit to upstream load paths, which the same seam
+budget declines. Recorded here rather than hidden.
 """
 
 from __future__ import annotations
@@ -42,6 +66,8 @@ from core.inference.llama_cpp import (
     cached_gguf_for_load,
 )
 from core.inference.llama_server_args import _flag_name
+from hub.utils.paths import is_valid_repo_id
+from utils.models.model_config import colocated_split_shards
 from utils.paths import is_local_path
 
 # ("local", path) or ("hf", repo_id).
@@ -55,32 +81,72 @@ _CANONICAL_HF_FLAG = "--spec-draft-hf"
 _ALL_DRAFT_FLAGS = _HF_DRAFT_FLAGS | _LOCAL_DRAFT_FLAGS
 
 
-def _strip_draft_flags(args: Sequence[str]) -> list[str]:
-    """Every drafter-naming flag and its value removed; everything else kept in
-    order.
+def _draft_flag_spans(args: Sequence[str]) -> list[Tuple[int, int, str, str]]:
+    """Every drafter-naming flag in ``args`` as ``(start, stop, kind, value)``.
+
+    ``stop`` is exclusive and covers the flag's value token when the ``-f v``
+    spelling is used, so a caller can remove the whole span. ``kind`` is
+    "hf" or "local"; ``value`` is "" for a malformed trailing flag that owns
+    no value.
+
+    THE single scanner. Both stripping (compose) and reading a pin back
+    (/current) go through it, so the write side and the read side cannot
+    recognise different subsets of the vocabulary -- the failure this module's
+    docstring exists to forbid, which a hand-rolled reader reintroduced once
+    already.
 
     Matching is on the parsed flag NAME, never on a substring: an ``--alias``
-    value of ``my-md-model`` contains "-md" and must survive.
+    value of ``my-md-model`` contains "-md" and must survive. ``_flag_name``
+    also peels ``--flag=value`` and normalises ``_`` to ``-``, so the
+    ``--model_draft`` spelling is covered without being listed.
     """
-    out: list[str] = []
-    skip_next = False
+    spans: list[Tuple[int, int, str, str]] = []
+    consumed = -1
     for i, raw in enumerate(args):
-        if skip_next:
-            skip_next = False
+        if i <= consumed:
             continue
         token = str(raw)
         flag = _flag_name(token)
-        if flag in _ALL_DRAFT_FLAGS:
-            _, eq, _inline = token.partition("=")
-            if not eq:
-                # Separate value form: drop the following token too, unless it
-                # is itself a flag (a malformed trailing "-md" owns no value).
-                nxt = str(args[i + 1]) if i + 1 < len(args) else ""
-                if nxt and not nxt.startswith("-"):
-                    skip_next = True
+        if flag not in _ALL_DRAFT_FLAGS:
             continue
-        out.append(token)
-    return out
+        kind = "hf" if flag in _HF_DRAFT_FLAGS else "local"
+        _, eq, inline = token.partition("=")
+        if eq:
+            spans.append((i, i + 1, kind, inline))
+            continue
+        # Separate value form: the following token belongs to the flag, unless
+        # it is itself a flag (a malformed trailing "-md" owns no value).
+        nxt = str(args[i + 1]) if i + 1 < len(args) else ""
+        if nxt and not nxt.startswith("-"):
+            consumed = i + 1
+            spans.append((i, i + 2, kind, nxt))
+        else:
+            spans.append((i, i + 1, kind, ""))
+    return spans
+
+
+def _strip_draft_flags(args: Sequence[str]) -> list[str]:
+    """Every drafter-naming flag and its value removed; everything else kept in
+    order."""
+    dropped = {
+        i for start, stop, _kind, _value in _draft_flag_spans(args)
+        for i in range(start, stop)
+    }
+    return [str(raw) for i, raw in enumerate(args) if i not in dropped]
+
+
+def current_draft_pin(args: Optional[Sequence[str]]) -> Optional[DraftChoice]:
+    """The drafter ``args`` currently pins, or None for auto-discovery.
+
+    Last-wins, matching llama-server's own argument ordering and what
+    compose_draft_args guarantees it leaves behind. A flag with no value pins
+    nothing, so it is skipped rather than reported as a pin on "".
+    """
+    pinned: Optional[DraftChoice] = None
+    for _start, _stop, kind, value in _draft_flag_spans(args or []):
+        if value:
+            pinned = (kind, value)
+    return pinned
 
 
 def compose_draft_args(
@@ -109,6 +175,18 @@ VERDICT_OUTSIDE = "outside_permitted_directory"
 VERDICT_NO_TARGET = "no_target"
 VERDICT_VOCAB_MISMATCH = "vocab_mismatch"
 VERDICT_VOCAB_UNKNOWN = "vocab_unknown"
+# Accepted, but nothing about the repository's CONTENT was checked -- only that
+# the identifier is shaped like a repo id. ok is True (the pin is written) and
+# the reason travels with it so the UI says "could not verify" rather than
+# implying the drafter was validated the way a local one is. The spec's rule for
+# a remote drafter is "an explicit could-not-verify state shown to the user,
+# never a silent pass"; an affirmative "ok" with no further word is that silent
+# pass, which is what this verdict exists to prevent.
+VERDICT_UNVERIFIED = "unverified"
+# The identifier is not a Hugging Face repo id at all. A shape failure IS a
+# rejection: nothing downstream can do anything useful with it, and letting it
+# through would put a path or a typo in --spec-draft-hf.
+VERDICT_INVALID_REPO_ID = "invalid_repo_id"
 # Given, but the identifier could not be resolved to a real local file --
 # distinct from VERDICT_NO_TARGET ("nothing was given at all"). Returned by the
 # routes below, before validate_choice ever runs: it takes a real path, not an
@@ -147,6 +225,28 @@ def _is_confined(target: Path, draft: Path) -> bool:
         return False
 
 
+def _shard_paths(draft: Path) -> list[Path]:
+    """Every file llama-server will open for ``draft``, fully resolved.
+
+    A split GGUF names only its first shard on the command line; the loader
+    opens the siblings implicitly. Confining just the launch path would leave
+    those siblings unchecked, which is exactly the escape the spec names -- a
+    split drafter whose second shard points outside the permitted directory.
+
+    A non-split path is its own complete one-file set, so this degrades to
+    ``[draft]``; so does any enumeration failure, which keeps a permissions
+    error on the directory from turning into a crash while still validating
+    the one path we do know about.
+    """
+    try:
+        shards, _complete = colocated_split_shards(draft)
+    except Exception:
+        logger.debug("Could not enumerate shards for %s", draft, exc_info = True)
+        return [draft]
+    resolved = [_resolve_real(str(s)) for s in shards]
+    return resolved or [draft]
+
+
 def validate_choice(target_path: Optional[str], choice: DraftChoice) -> DraftVerdict:
     """Whether ``choice`` is a usable drafter for ``target_path``.
 
@@ -155,7 +255,23 @@ def validate_choice(target_path: Optional[str], choice: DraftChoice) -> DraftVer
     """
     kind, ref = choice
     if kind == "hf":
-        return DraftVerdict(ok = True, reason = VERDICT_OK, detail = str(ref))
+        if not is_valid_repo_id(str(ref)):
+            return DraftVerdict(
+                ok = False, reason = VERDICT_INVALID_REPO_ID,
+                detail = f"'{ref}' is not a Hugging Face repository id",
+            )
+        # Shape only. Confirming the repo EXISTS, or reading its GGUF header for
+        # a vocabulary comparison, means Hub network I/O on a settings control --
+        # the same cost that got ModelConfig.from_identifier rejected for the
+        # resolver above. So the pin is written and the user is told plainly
+        # that it was not checked, rather than being handed a bare "ok".
+        return DraftVerdict(
+            ok = True, reason = VERDICT_UNVERIFIED,
+            detail = (
+                f"'{ref}' is shaped like a repository id, but it was not "
+                "contacted: existence and vocabulary are unverified"
+            ),
+        )
 
     if not target_path:
         return DraftVerdict(
@@ -175,6 +291,15 @@ def validate_choice(target_path: Optional[str], choice: DraftChoice) -> DraftVer
             ok = False, reason = VERDICT_OUTSIDE,
             detail = f"{draft.name} is outside {target.parent}",
         )
+    # EVERY shard, not just the launch path. The loader opens the siblings of a
+    # split drafter without them ever appearing on the command line, so a check
+    # that stops at the named file confines nothing for a split set.
+    for shard in _shard_paths(draft):
+        if not _is_confined(target, shard):
+            return DraftVerdict(
+                ok = False, reason = VERDICT_OUTSIDE,
+                detail = f"shard {shard.name} is outside {target.parent}",
+            )
     size_bytes = draft.stat().st_size
     v_target = read_gguf_vocab_size(str(target))
     v_draft = read_gguf_vocab_size(str(draft))
@@ -254,6 +379,15 @@ def read_gguf_vocab_size(path: str) -> Optional[int]:
                     if len(atype_raw) < 4 or len(alen_raw) < 8:
                         return None
                     (alen,) = struct.unpack("<Q", alen_raw)
+                    if alen > _MAX_LEN:
+                        # Bounded like its four siblings, and for a sharper
+                        # reason than theirs: this value is RETURNED, not just
+                        # read past. Unbounded, a crafted header yields an
+                        # absurd "vocabulary size" that is not None, so two such
+                        # files compare equal and validate_choice admits the
+                        # pair -- the silent pass the None contract exists to
+                        # prevent.
+                        return None
                     return int(alen)
                 if not _skip_value(f, vtype):
                     return None
@@ -378,6 +512,35 @@ class SelectIn(BaseModel):
     gguf_variant: Optional[str] = None
     existing_args: list[str] = []
     choice: Optional[ChoiceIn] = None
+
+
+class CurrentIn(BaseModel):
+    existing_args: list[str] = []
+
+
+@router.post("/current")
+def current_draft_model(
+    payload: CurrentIn,
+    current_subject: str = Depends(get_current_subject),
+) -> dict:
+    """The drafter ``existing_args`` currently pins, or ``null``.
+
+    The frontend's single source of truth for what is pinned: it seeds the
+    picker's controls from this and re-validates from this, and never inspects
+    the argument list itself. That is not a stylistic preference -- the
+    vocabulary is seven spellings in two value forms with ``_``/``-``
+    normalisation on top, and a picker that reimplemented a subset of it
+    displayed "Automatic" for a model that was in fact pinned.
+
+    POST rather than GET because the input is an argument LIST; encoding one in
+    a query string would be a third place for the two sides to disagree about
+    how arguments are spelled.
+    """
+    pin = current_draft_pin(payload.existing_args)
+    if pin is None:
+        return {"pin": None}
+    kind, ref = pin
+    return {"pin": {"kind": kind, "ref": ref}}
 
 
 @router.get("/candidates")
