@@ -21,6 +21,7 @@ import {
   resolveStagedDiffusionClassification,
   useChatRuntimeStore,
 } from "@/features/chat";
+import { DraftModelPicker } from "@/features/chat/components/draft-model-picker";
 import { prepareHfTokenForUse } from "@/features/hf-auth";
 import {
   type VramBudgetSettings,
@@ -910,6 +911,7 @@ function MlxAdvancedSettings({
 function GgufAdvancedSettings({
   config,
   update,
+  modelPath,
   showDraftTokens,
   speculativeFallback,
   onEditTemplate,
@@ -923,6 +925,8 @@ function GgufAdvancedSettings({
 }: {
   config: PerModelConfig;
   update: (patch: Partial<PerModelConfig>) => void;
+  /** Local path this page resolves the model from, same one used for the staged GGUF metadata fetch. */
+  modelPath: string;
   showDraftTokens: boolean;
   speculativeFallback: string;
   onEditTemplate: () => void;
@@ -1036,6 +1040,25 @@ function GgufAdvancedSettings({
           </SelectContent>
         </Select>
       </div>
+
+      {/* GGUF only, same reason ExtraArgsRow below is: the diffusion shim appends no
+          llama-server flags and withoutUnsupportedDiffusionSettings clears
+          llamaExtraArgs outright for a diffusion classification, so a pin written here
+          for that model would be silently dropped rather than merely inert. */}
+      {!isDiffusion && (
+        <DraftModelPicker
+          modelPath={modelPath}
+          speculativeType={config.speculativeType ?? speculativeFallback}
+          existingArgs={config.llamaExtraArgs ?? []}
+          onArgsChange={(args) =>
+            // Same null-vs-[] convention ExtraArgsRow's own commit() uses: the stored
+            // "no flags" state is null, not [], so an empty result here (Clear, with no
+            // other extra arguments already present) must not diverge from what the
+            // Extra Arguments box itself writes for the same state.
+            update({ llamaExtraArgs: args.length > 0 ? args : null })
+          }
+        />
+      )}
 
       {showDraftTokens && (
         <div className={ROW_CLASS}>
@@ -2344,6 +2367,7 @@ export function ModelConfigPage({
               <GgufAdvancedSettings
                 config={config}
                 update={update}
+                modelPath={target.id}
                 showDraftTokens={showDraftTokens}
                 speculativeFallback={speculativeFallback}
                 onEditTemplate={() => setTemplateOpen(true)}
