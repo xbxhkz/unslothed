@@ -54,15 +54,49 @@ def client():
 
 class TestCandidates:
     def test_colocated_ggufs_are_offered_and_the_target_itself_is_not(self, tmp_path, client):
+        # A genuine local path, still resolved exactly as before this fix round
+        # (the `is_local_path` branch of `_resolve_model_path` is a straight
+        # `_resolve_real`, unchanged from what this route did previously).
         target = _gguf(tmp_path / "m" / "target.gguf")
         _gguf(tmp_path / "m" / "draft.gguf")
-        r = client.get("/api/draft-model/candidates", params = {"model_path": str(target)})
+        r = client.get("/api/draft-model/candidates", params = {"model_id": str(target)})
         assert r.status_code == 200
-        refs = [c["ref"] for c in r.json()["candidates"]]
+        body = r.json()
+        assert body["resolved"] is True
+        refs = [c["ref"] for c in body["candidates"]]
         assert any("draft.gguf" in x for x in refs)
         assert not any("target.gguf" in x for x in refs), (
             "a model must never be offered as its own drafter"
         )
+
+    def test_an_unresolvable_repo_id_reports_unresolved_not_empty(self, client):
+        # A bare HF-shaped identifier this machine has never cached anything for.
+        # Before the fix this was treated as a literal filesystem path (globbing
+        # a nonsense directory); it must now come back as "could not resolve",
+        # never as a plausible-but-wrong empty candidate list.
+        r = client.get(
+            "/api/draft-model/candidates",
+            params = {
+                "model_id": "unsloth-test-fixture-org/does-not-exist-Qwen-GGUF",
+                "gguf_variant": "Q4_K_M",
+            },
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["resolved"] is False
+        assert body["candidates"] == []
+
+    def test_a_repo_id_with_no_variant_is_unresolved_not_empty(self, client):
+        # cached_gguf_for_load refuses to guess a quant, by design; that must
+        # surface the same way as any other unresolvable identifier.
+        r = client.get(
+            "/api/draft-model/candidates",
+            params = {"model_id": "unsloth/Qwen3-4B-GGUF"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["resolved"] is False
+        assert body["candidates"] == []
 
 
 class TestSelect:
@@ -70,7 +104,7 @@ class TestSelect:
         target = _gguf(tmp_path / "m" / "target.gguf", 32)
         draft = _gguf(tmp_path / "m" / "draft.gguf", 32)
         r = client.post("/api/draft-model/select", json = {
-            "model_path": str(target),
+            "model_id": str(target),
             "existing_args": ["--threads", "8"],
             "choice": {"kind": "local", "ref": str(draft)},
         })
@@ -83,7 +117,7 @@ class TestSelect:
         target = _gguf(tmp_path / "m" / "target.gguf", 32)
         draft = _gguf(tmp_path / "m" / "draft.gguf", 64)
         r = client.post("/api/draft-model/select", json = {
-            "model_path": str(target),
+            "model_id": str(target),
             "existing_args": ["--threads", "8"],
             "choice": {"kind": "local", "ref": str(draft)},
         })
@@ -98,8 +132,40 @@ class TestSelect:
     def test_clearing_removes_the_drafter_flags(self, tmp_path, client):
         target = _gguf(tmp_path / "m" / "target.gguf")
         r = client.post("/api/draft-model/select", json = {
-            "model_path": str(target),
+            "model_id": str(target),
             "existing_args": ["--threads", "8", "-md", "/old.gguf"],
             "choice": None,
         })
         assert r.json()["llama_extra_args"] == ["--threads", "8"]
+
+    def test_an_unresolvable_repo_id_yields_unresolved_not_no_target(self, client):
+        # Given (non-empty model_id) but unresolvable -- must be VERDICT_UNRESOLVED,
+        # not VERDICT_NO_TARGET (which means no model_id was given at all) and not
+        # a silent pass-through that lets validate_choice treat the raw id as a path.
+        r = client.post("/api/draft-model/select", json = {
+            "model_id": "unsloth-test-fixture-org/does-not-exist-Qwen-GGUF",
+            "gguf_variant": "Q4_K_M",
+            "existing_args": [],
+            "choice": {"kind": "local", "ref": "draft.gguf"},
+        })
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is False
+        assert body["reason"] == "unresolved"
+        assert body["llama_extra_args"] is None
+
+    def test_an_hf_choice_does_not_need_the_target_to_resolve(self, client):
+        # validate_choice never looks at target_path for an "hf" pick, so an
+        # unresolvable target model must not block a perfectly valid hf drafter.
+        r = client.post("/api/draft-model/select", json = {
+            "model_id": "unsloth-test-fixture-org/does-not-exist-Qwen-GGUF",
+            "gguf_variant": "Q4_K_M",
+            "existing_args": [],
+            "choice": {"kind": "hf", "ref": "unsloth/Qwen3-0.6B-GGUF"},
+        })
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is True
+        assert body["llama_extra_args"] == [
+            "--spec-draft-hf", "unsloth/Qwen3-0.6B-GGUF",
+        ]

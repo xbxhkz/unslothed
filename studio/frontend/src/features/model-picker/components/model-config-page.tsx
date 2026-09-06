@@ -911,7 +911,8 @@ function MlxAdvancedSettings({
 function GgufAdvancedSettings({
   config,
   update,
-  modelPath,
+  modelId,
+  ggufVariant,
   showDraftTokens,
   speculativeFallback,
   onEditTemplate,
@@ -925,8 +926,11 @@ function GgufAdvancedSettings({
 }: {
   config: PerModelConfig;
   update: (patch: Partial<PerModelConfig>) => void;
-  /** Local path this page resolves the model from, same one used for the staged GGUF metadata fetch. */
-  modelPath: string;
+  /** Identifier (HF repo id or local path) this page resolves the model from, same
+   * one used for the staged GGUF metadata fetch -- the backend resolves it to a
+   * real local file, same as it does for that other fetch. */
+  modelId: string;
+  ggufVariant: string | null;
   showDraftTokens: boolean;
   speculativeFallback: string;
   onEditTemplate: () => void;
@@ -1047,7 +1051,8 @@ function GgufAdvancedSettings({
           for that model would be silently dropped rather than merely inert. */}
       {!isDiffusion && (
         <DraftModelPicker
-          modelPath={modelPath}
+          modelId={modelId}
+          ggufVariant={ggufVariant}
           speculativeType={config.speculativeType ?? speculativeFallback}
           existingArgs={config.llamaExtraArgs ?? []}
           onArgsChange={(args) =>
@@ -2367,7 +2372,8 @@ export function ModelConfigPage({
               <GgufAdvancedSettings
                 config={config}
                 update={update}
-                modelPath={target.id}
+                modelId={target.id}
+                ggufVariant={target.ggufVariant ?? null}
                 showDraftTokens={showDraftTokens}
                 speculativeFallback={speculativeFallback}
                 onEditTemplate={() => setTemplateOpen(true)}

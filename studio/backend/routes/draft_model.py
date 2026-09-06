@@ -28,8 +28,13 @@ from __future__ import annotations
 
 from typing import Optional, Sequence, Tuple
 
-from core.inference.llama_cpp import _HF_DRAFT_FLAGS, _LOCAL_DRAFT_FLAGS
+from core.inference.llama_cpp import (
+    _HF_DRAFT_FLAGS,
+    _LOCAL_DRAFT_FLAGS,
+    cached_gguf_for_load,
+)
 from core.inference.llama_server_args import _flag_name
+from utils.paths import is_local_path
 
 # ("local", path) or ("hf", repo_id).
 DraftChoice = Tuple[str, str]
@@ -96,6 +101,11 @@ VERDICT_OUTSIDE = "outside_permitted_directory"
 VERDICT_NO_TARGET = "no_target"
 VERDICT_VOCAB_MISMATCH = "vocab_mismatch"
 VERDICT_VOCAB_UNKNOWN = "vocab_unknown"
+# Given, but the identifier could not be resolved to a real local file --
+# distinct from VERDICT_NO_TARGET ("nothing was given at all"). Returned by the
+# routes below, before validate_choice ever runs: it takes a real path, not an
+# identifier, and has no way to tell these two cases apart itself.
+VERDICT_UNRESOLVED = "unresolved"
 
 
 @dataclass
@@ -303,42 +313,100 @@ router = APIRouter()
 logger = get_logger(__name__)
 
 
+def _resolve_model_path(
+    model_id: Optional[str], gguf_variant: Optional[str]
+) -> Optional[Path]:
+    """The real local .gguf path behind ``model_id``, or None if it cannot be
+    found on this machine.
+
+    ``model_id`` is a clean identifier the frontend already has on hand: either
+    a local file/directory path, or a bare HF repo id like the ones the Hub tab
+    hands out (a repo id is NOT a filesystem path, and treating it as one --
+    the bug this resolver replaces -- makes ``/candidates`` glob a nonsense
+    directory and makes ``/select`` reject a legitimate local drafter as
+    outside the permitted directory, both silently).
+
+    A repo id is resolved against what THIS install already has cached --
+    filesystem only; ``cached_gguf_for_load(..., verify_sizes=False)`` never
+    reaches the Hub, since the size-verification branch it would otherwise take
+    is the only network-touching part of it -- because this module's whole job
+    is checking siblings of a model already on disk, not fetching fresh
+    information about one that might not be.
+
+    ``ModelConfig.from_identifier`` performs the equivalent resolution for the
+    LOAD path, but was rejected here on cost: its remote branch is a genuine
+    network + detection pipeline (a Hub listing, vision detection, an optional
+    transformers import -- see the comment at routes/inference.py's own call
+    site), and that belongs to a one-time model load, not a value read on every
+    candidate list and every drafter pick in a settings sidebar.
+
+    A bare repo id with no ``gguf_variant`` is deliberately unresolvable: with
+    more than one quant cached there would be no way to know which one is
+    meant, and with none cached there is nothing to find either way.
+    """
+    if not model_id:
+        return None
+    try:
+        if is_local_path(model_id):
+            return _resolve_real(model_id)
+        cached = cached_gguf_for_load(model_id, gguf_variant, verify_sizes = False)
+    except Exception:
+        logger.debug(
+            "Could not resolve model id %r for drafter lookup", model_id, exc_info = True
+        )
+        return None
+    if not cached:
+        return None
+    return _resolve_real(cached)
+
+
 class ChoiceIn(BaseModel):
     kind: str
     ref: str
 
 
 class SelectIn(BaseModel):
-    model_path: Optional[str] = None
+    model_id: Optional[str] = None
+    gguf_variant: Optional[str] = None
     existing_args: list[str] = []
     choice: Optional[ChoiceIn] = None
 
 
 @router.get("/candidates")
 def list_candidates(
-    model_path: str = Query("", max_length = 4096),
+    model_id: str = Query("", max_length = 4096),
+    gguf_variant: Optional[str] = Query(None, max_length = 256),
     current_subject: str = Depends(get_current_subject),
 ) -> dict:
-    """Drafters selectable for ``model_path``.
+    """Drafters selectable for ``model_id``.
 
     Colocated GGUFs only. The target itself is excluded: a model cannot draft
     for itself, and offering it invites a load that wastes VRAM on a second
     copy of the same weights.
+
+    ``resolved`` is false when ``model_id`` could not be resolved to a real
+    local file at all, as distinct from resolving fine and finding no
+    siblings. The two must never collapse into the same empty list: that would
+    have a resolution failure read to the UI as "this model genuinely has no
+    drafters nearby" rather than "this model could not even be checked".
     """
+    if not model_id:
+        return {"candidates": [], "resolved": True}
+    target = _resolve_model_path(model_id, gguf_variant)
+    if target is None:
+        return {"candidates": [], "resolved": False}
     out: list[dict] = []
-    if model_path:
-        target = _resolve_real(model_path)
-        if target.parent.is_dir():
-            for f in sorted(target.parent.glob("*.gguf")):
-                if _resolve_real(str(f)) == target:
-                    continue
-                out.append({
-                    "kind": "local",
-                    "ref": str(f),
-                    "label": f.name,
-                    "source": "sidecar" if _looks_like_sidecar(f.name) else "local",
-                })
-    return {"candidates": out}
+    if target.parent.is_dir():
+        for f in sorted(target.parent.glob("*.gguf")):
+            if _resolve_real(str(f)) == target:
+                continue
+            out.append({
+                "kind": "local",
+                "ref": str(f),
+                "label": f.name,
+                "source": "sidecar" if _looks_like_sidecar(f.name) else "local",
+            })
+    return {"candidates": out, "resolved": True}
 
 
 def _looks_like_sidecar(name: str) -> bool:
@@ -366,11 +434,26 @@ def select_draft_model(
             "size_bytes": None, "vocab_target": None, "vocab_draft": None,
             "llama_extra_args": compose_draft_args(payload.existing_args, None),
         }
-    verdict = validate_choice(payload.model_path, (payload.choice.kind, payload.choice.ref))
-    args = (
-        compose_draft_args(payload.existing_args, (payload.choice.kind, payload.choice.ref))
-        if verdict.ok else None
-    )
+    choice = (payload.choice.kind, payload.choice.ref)
+    target_path: Optional[str] = None
+    if choice[0] != "hf":
+        # An "hf" choice never looks at the target's own path (validate_choice
+        # returns before it gets there), so resolving one here would spend a
+        # cache scan on a value that outcome can never use.
+        if payload.model_id:
+            resolved = _resolve_model_path(payload.model_id, payload.gguf_variant)
+            if resolved is None:
+                # Given, but unresolvable -- distinct from validate_choice's own
+                # VERDICT_NO_TARGET, which means no model_id was given at all.
+                return {
+                    "ok": False, "reason": VERDICT_UNRESOLVED,
+                    "detail": f"could not resolve '{payload.model_id}' to a local file",
+                    "size_bytes": None, "vocab_target": None, "vocab_draft": None,
+                    "llama_extra_args": None,
+                }
+            target_path = str(resolved)
+    verdict = validate_choice(target_path, choice)
+    args = compose_draft_args(payload.existing_args, choice) if verdict.ok else None
     return {
         "ok": verdict.ok, "reason": verdict.reason, "detail": verdict.detail,
         "size_bytes": verdict.size_bytes,

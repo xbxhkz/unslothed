@@ -32,20 +32,45 @@ export type SelectResult = {
   llamaExtraArgs: string[] | null;
 };
 
+/**
+ * `resolved` is separate from an empty `candidates` list on purpose: the backend
+ * resolves `modelId` (an HF repo id or a local path) to an actual local GGUF file
+ * before it can glob that file's directory for siblings, and that resolution can
+ * fail (nothing cached locally under this id/variant yet). An empty list for that
+ * reason reads as "no drafters were found" when the truth is "this model could not
+ * even be checked" -- two different things the picker has to say differently.
+ */
+export type DraftCandidatesResult = {
+  candidates: DraftCandidate[];
+  resolved: boolean;
+};
+
 export async function fetchDraftCandidates(
-  modelPath: string,
-): Promise<DraftCandidate[]> {
-  const url = `/api/draft-model/candidates?model_path=${encodeURIComponent(modelPath)}`;
+  modelId: string,
+  ggufVariant: string | null,
+): Promise<DraftCandidatesResult> {
+  const params = new URLSearchParams({
+    // biome-ignore lint/style/useNamingConvention: API schema
+    model_id: modelId,
+  });
+  if (ggufVariant) {
+    params.set("gguf_variant", ggufVariant);
+  }
+  const url = `/api/draft-model/candidates?${params.toString()}`;
   const res = await authFetch(url);
   if (!res.ok) {
-    return [];
+    return { candidates: [], resolved: true };
   }
   const body = await res.json().catch(() => null);
-  return Array.isArray(body?.candidates) ? body.candidates : [];
+  return {
+    candidates: Array.isArray(body?.candidates) ? body.candidates : [],
+    resolved: Boolean(body?.resolved),
+  };
 }
 
 export async function selectDraftModel(
-  modelPath: string,
+  modelId: string,
+  ggufVariant: string | null,
   existingArgs: string[],
   choice: DraftChoice,
 ): Promise<SelectResult> {
@@ -54,7 +79,9 @@ export async function selectDraftModel(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       // biome-ignore lint/style/useNamingConvention: API schema
-      model_path: modelPath,
+      model_id: modelId,
+      // biome-ignore lint/style/useNamingConvention: API schema
+      gguf_variant: ggufVariant,
       // biome-ignore lint/style/useNamingConvention: API schema
       existing_args: existingArgs,
       choice: choice ? { kind: choice.kind, ref: choice.ref } : null,

@@ -19,6 +19,16 @@ import {
   selectDraftModel,
 } from "../api/draft-model-api";
 
+/**
+ * Copy for when the model behind `modelId` could not be resolved to a local file at
+ * all, as distinct from resolving fine and simply having no colocated siblings.
+ * Conflating the two would tell a user "no colocated drafters found" for a model the
+ * backend never actually got to look next to.
+ */
+const UNRESOLVED_MODEL_MESSAGE =
+  "Could not resolve this model to look for drafters.";
+const NO_CANDIDATES_MESSAGE = "No colocated drafters found.";
+
 /** Modes that launch no separate drafter. A picker here would be a control
  *  with no effect, which is worse than no control. */
 const NO_DRAFTER_MODES = new Set(["off", "ngram", "ngram-simple"]);
@@ -32,19 +42,25 @@ const NO_DRAFTER_MODES = new Set(["off", "ngram", "ngram-simple"]);
 const AUTOMATIC_VALUE = "__automatic__";
 
 export type DraftModelPickerProps = {
-  modelPath: string;
+  modelId: string;
+  ggufVariant: string | null;
   speculativeType: string;
   existingArgs: string[];
   onArgsChange: (args: string[]) => void;
 };
 
 export function DraftModelPicker({
-  modelPath,
+  modelId,
+  ggufVariant,
   speculativeType,
   existingArgs,
   onArgsChange,
 }: DraftModelPickerProps) {
   const [candidates, setCandidates] = useState<DraftCandidate[]>([]);
+  // Whether the backend could resolve modelId to an actual local file at all, as
+  // opposed to resolving it fine and simply finding no siblings. Starts true so a
+  // model that hasn't answered yet doesn't flash the unresolved copy.
+  const [resolved, setResolved] = useState(true);
   // Mirrors what an uncontrolled native <select> tracks for free: which
   // option reads as selected. Radix's Select is a controlled component, so
   // this state exists purely to reflect the last choice back into the
@@ -58,28 +74,36 @@ export function DraftModelPicker({
   const hidden = NO_DRAFTER_MODES.has(speculativeType);
 
   useEffect(() => {
-    if (hidden || !modelPath) {
+    if (hidden || !modelId) {
       return;
     }
     let cancelled = false;
-    fetchDraftCandidates(modelPath).then((c) => {
+    fetchDraftCandidates(modelId, ggufVariant).then((r) => {
       if (!cancelled) {
-        setCandidates(c);
+        setCandidates(r.candidates);
+        setResolved(r.resolved);
       }
     });
     return () => {
       cancelled = true;
     };
-  }, [hidden, modelPath]);
+  }, [hidden, modelId, ggufVariant]);
 
   const apply = useCallback(
     async (choice: DraftChoice) => {
       setProblem("");
       setNote("");
       try {
-        const r = await selectDraftModel(modelPath, existingArgs, choice);
+        const r = await selectDraftModel(
+          modelId,
+          ggufVariant,
+          existingArgs,
+          choice,
+        );
         if (!r.ok || r.llamaExtraArgs === null) {
           // Rejected: surface the reason and leave the caller's args untouched.
+          // Covers the unresolved-model verdict the same way as any other
+          // rejection -- the backend's reason/detail text is what's shown.
           setProblem(r.detail || r.reason);
           return;
         }
@@ -105,7 +129,7 @@ export function DraftModelPicker({
         setProblem("could not reach the backend to check this draft model");
       }
     },
-    [modelPath, existingArgs, onArgsChange],
+    [modelId, ggufVariant, existingArgs, onArgsChange],
   );
 
   // Re-validate an existing pin on mount (Task 8 extends this). A pinned
@@ -114,7 +138,7 @@ export function DraftModelPicker({
   // change would re-validate our own writes.
   // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only re-validation of the pin baked into existingArgs at load time
   useEffect(() => {
-    if (hidden || !modelPath) {
+    if (hidden || !modelId) {
       return;
     }
     const i = existingArgs.findIndex(
@@ -124,7 +148,7 @@ export function DraftModelPicker({
       return;
     }
     const kind = existingArgs[i] === "--spec-draft-hf" ? "hf" : "local";
-    selectDraftModel(modelPath, existingArgs, {
+    selectDraftModel(modelId, ggufVariant, existingArgs, {
       kind: kind as "local" | "hf",
       ref: existingArgs[i + 1],
     }).then((r) => {
@@ -132,7 +156,7 @@ export function DraftModelPicker({
         setProblem(`pinned drafter unusable: ${r.detail || r.reason}`);
       }
     });
-  }, [hidden, modelPath]);
+  }, [hidden, modelId, ggufVariant]);
 
   if (hidden) {
     return null;
@@ -184,7 +208,7 @@ export function DraftModelPicker({
 
       {candidates.length === 0 && (
         <p className="text-ui-11 text-muted-foreground">
-          No colocated drafters found.
+          {resolved ? NO_CANDIDATES_MESSAGE : UNRESOLVED_MODEL_MESSAGE}
         </p>
       )}
 
