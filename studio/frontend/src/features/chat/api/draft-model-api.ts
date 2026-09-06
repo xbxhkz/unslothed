@@ -40,7 +40,7 @@ export async function fetchDraftCandidates(
   if (!res.ok) {
     return [];
   }
-  const body = await res.json();
+  const body = await res.json().catch(() => null);
   return Array.isArray(body?.candidates) ? body.candidates : [];
 }
 
@@ -60,7 +60,23 @@ export async function selectDraftModel(
       choice: choice ? { kind: choice.kind, ref: choice.ref } : null,
     }),
   });
-  const b = await res.json();
+  const b = await res.json().catch(() => null);
+  if (!res.ok || b === null) {
+    // A non-2xx status or an unparsable body (dev-server HTML fallback, proxy
+    // error page, a 500 with no JSON handler) is a real possibility, not a
+    // theoretical one -- surface it as an ordinary rejection rather than
+    // letting a thrown SyntaxError reach an unguarded caller and leave the
+    // picker blank with no indication anything failed.
+    return {
+      ok: false,
+      reason: "network",
+      detail: `the backend could not be reached (HTTP ${res.status})`,
+      sizeBytes: null,
+      vocabTarget: null,
+      vocabDraft: null,
+      llamaExtraArgs: null,
+    };
+  }
   return {
     ok: Boolean(b?.ok),
     reason: String(b?.reason ?? ""),

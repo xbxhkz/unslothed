@@ -76,24 +76,34 @@ export function DraftModelPicker({
     async (choice: DraftChoice) => {
       setProblem("");
       setNote("");
-      const r = await selectDraftModel(modelPath, existingArgs, choice);
-      if (!r.ok || r.llamaExtraArgs === null) {
-        // Rejected: surface the reason and leave the caller's args untouched.
-        setProblem(r.detail || r.reason);
-        return;
+      try {
+        const r = await selectDraftModel(modelPath, existingArgs, choice);
+        if (!r.ok || r.llamaExtraArgs === null) {
+          // Rejected: surface the reason and leave the caller's args untouched.
+          setProblem(r.detail || r.reason);
+          return;
+        }
+        if (r.vocabTarget !== null && r.vocabDraft !== null) {
+          // Deliberately "vocabulary matches", never "compatible": equal vocab
+          // size is necessary, not sufficient, for a good speculative pair. A
+          // vocab mismatch is a rejection reason (vocab_mismatch), so it never
+          // reaches this branch -- it surfaces as `problem` via r.detail instead.
+          setNote(`vocabulary matches (${r.vocabTarget})`);
+        }
+        if (r.sizeBytes !== null) {
+          const gb = (r.sizeBytes / 1024 ** 3).toFixed(2);
+          setNote((n) => (n ? `${n} · ${gb} GB` : `${gb} GB`));
+        }
+        onArgsChange(r.llamaExtraArgs);
+      } catch {
+        // Not merely a defensive backstop: selectDraftModel guards a bad
+        // status or an unparsable body, but authFetch's own fetch call can
+        // still throw outright (offline, backend not listening yet) before
+        // any response exists to guard. Confirmed by exercising this path --
+        // without this catch, that throw is an unhandled rejection and the
+        // picker goes blank with no indication anything failed.
+        setProblem("could not reach the backend to check this draft model");
       }
-      if (r.vocabTarget !== null && r.vocabDraft !== null) {
-        // Deliberately "vocabulary matches", never "compatible": equal vocab
-        // size is necessary, not sufficient, for a good speculative pair. A
-        // vocab mismatch is a rejection reason (vocab_mismatch), so it never
-        // reaches this branch -- it surfaces as `problem` via r.detail instead.
-        setNote(`vocabulary matches (${r.vocabTarget})`);
-      }
-      if (r.sizeBytes !== null) {
-        const gb = (r.sizeBytes / 1024 ** 3).toFixed(2);
-        setNote((n) => (n ? `${n} · ${gb} GB` : `${gb} GB`));
-      }
-      onArgsChange(r.llamaExtraArgs);
     },
     [modelPath, existingArgs, onArgsChange],
   );
