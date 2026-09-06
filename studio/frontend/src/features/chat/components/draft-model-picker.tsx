@@ -151,11 +151,22 @@ export function DraftModelPicker({
     selectDraftModel(modelId, ggufVariant, existingArgs, {
       kind: kind as "local" | "hf",
       ref: existingArgs[i + 1],
-    }).then((r) => {
-      if (!r.ok) {
-        setProblem(`pinned drafter unusable: ${r.detail || r.reason}`);
-      }
-    });
+    })
+      .then((r) => {
+        if (!r.ok) {
+          setProblem(`pinned drafter unusable: ${r.detail || r.reason}`);
+        }
+      })
+      .catch(() => {
+        // Same backstop as apply(): authFetch's own fetch() can throw before
+        // any Response exists (offline, backend not listening yet), which
+        // selectDraftModel's internal guards cannot catch. Without this, a
+        // pinned drafter that can't be re-validated on mount produces an
+        // unhandled rejection and the user sees nothing at all.
+        setProblem(
+          "could not reach the backend to check the pinned draft model",
+        );
+      });
   }, [hidden, modelId, ggufVariant]);
 
   if (hidden) {

@@ -22,6 +22,14 @@ Rebuilding it in TypeScript would mean two parsers with nothing binding them
 together -- the shape of the unpinned-dependency failure this project has
 already paid for once. The sets are imported, never retyped; tests/
 test_draft_model_compose.py pins their names so an upstream rename fails there.
+
+Known limitation: a pinned drafter that is later deleted fails OPEN at load
+time. routes/inference.py treats a local --model-draft that is not on disk as
+"no drafter loads and none is charged", so speculation silently reverts to
+none. The picker re-validates when it opens and marks a missing pin, but that
+only covers the UI path. Closing this properly means editing the upstream load
+path, which this sub-project's seam budget (one router-registration line)
+deliberately declines. Revisit if the seam constraint is ever relaxed.
 """
 
 from __future__ import annotations
