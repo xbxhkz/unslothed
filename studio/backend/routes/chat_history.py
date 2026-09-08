@@ -290,6 +290,7 @@ class ChatProjectPatch(BaseModel):
     archived: Optional[bool] = None
     createdAt: Optional[int] = None
     updatedAt: Optional[int] = None
+    rootPath: Optional[str] = None
 
 
 class ChatThreadListResponse(BaseModel):

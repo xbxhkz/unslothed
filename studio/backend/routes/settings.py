@@ -3,6 +3,7 @@
 
 import functools
 import hashlib
+import os
 import re
 import threading
 import time
@@ -131,6 +132,7 @@ from utils.media_generation_preset_settings import (
     set_media_generation_preset_settings,
     upsert_media_generation_preset,
 )
+from utils.workspace_root import classify_root, get_global_root, set_global_root
 
 router = APIRouter()
 
@@ -645,6 +647,24 @@ class LlamaCppPathResponse(BaseModel):
     reload_required: bool = False
 
 
+class WorkspaceRootPayload(BaseModel):
+    path: Optional[str] = None
+
+
+class WorkspaceRootWarning(BaseModel):
+    code: str
+    message: str
+
+
+class WorkspaceRootResponse(BaseModel):
+    path: Optional[str] = None
+    warnings: list[WorkspaceRootWarning] = Field(default_factory = list)
+
+
+class WorkspaceRootPreviewResponse(WorkspaceRootResponse):
+    exists: bool = False
+
+
 class OpenAIAutoSwitchPayload(BaseModel):
     enabled: bool
     # None leaves the stored value untouched (partial updates can't clobber it).
@@ -992,6 +1012,46 @@ def update_llama_cpp_path(
             log = logger,
         ) from exc
     return _llama_cpp_path_response()
+
+
+def _workspace_root_warnings(path: Optional[str]) -> list[WorkspaceRootWarning]:
+    return [WorkspaceRootWarning(code = w.code, message = w.message) for w in classify_root(path or "")]
+
+
+@router.get("/workspace-root", response_model = WorkspaceRootResponse)
+def get_workspace_root(current_subject: str = Depends(get_current_subject)) -> WorkspaceRootResponse:
+    path = get_global_root()
+    return WorkspaceRootResponse(path = path, warnings = _workspace_root_warnings(path))
+
+
+@router.put("/workspace-root", response_model = WorkspaceRootResponse)
+def put_workspace_root(
+    payload: WorkspaceRootPayload, current_subject: str = Depends(get_current_subject)
+) -> WorkspaceRootResponse:
+    """Set the global workspace root.
+
+    A flagged path is still stored: the policy is warn-only, so the warnings
+    ride along in the response for the UI to show. Returning 4xx here would
+    quietly turn this into a blocking feature.
+    """
+    path = set_global_root(payload.path)
+    return WorkspaceRootResponse(path = path, warnings = _workspace_root_warnings(path))
+
+
+@router.post("/workspace-root/preview", response_model = WorkspaceRootPreviewResponse)
+def preview_workspace_root(
+    payload: WorkspaceRootPayload, current_subject: str = Depends(get_current_subject)
+) -> WorkspaceRootPreviewResponse:
+    """Classify a candidate path WITHOUT storing it, so the UI can warn before
+    the user commits. Must never call ``set_global_root``."""
+    candidate = (payload.path or "").strip()
+    expanded = os.path.expanduser(candidate) if candidate else ""
+    resolved = os.path.realpath(expanded) if candidate else None
+    return WorkspaceRootPreviewResponse(
+        path = resolved,
+        warnings = _workspace_root_warnings(resolved),
+        exists = bool(candidate) and os.path.isdir(expanded),
+    )
 
 
 @router.get("/upload-limit", response_model = UploadLimitResponse)
