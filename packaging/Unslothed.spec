@@ -280,6 +280,28 @@ hiddenimports = [
 hiddenimports += collect_submodules("core.inference.assist_vision")
 hiddenimports += collect_submodules("core.inference.assist_code")
 
+# diceware generates the bootstrap admin password on a FIRST RUN with no
+# password set (auth/storage.py's generate_bootstrap_password). Found by
+# launching the built exe against an EMPTY UNSLOTH_STUDIO_HOME, which is the
+# only configuration that reaches this code -- every earlier test pointed at a
+# home that already had a password, so the crash never fired:
+#
+#   ModuleNotFoundError: No module named 'diceware.random_sources'
+#     ... diceware/__init__.py:84 in get_random_sources
+#
+# diceware resolves its random sources through an entry-point-style spec dict
+# in __about__.py and imports them by name, so Analysis's static walk never
+# follows the edge. collect_submodules picks up random_sources (and anything
+# else it loads the same way); collect_data_files brings the wordlists, which
+# are equally invisible and equally required -- a random source with no word
+# list still cannot produce a passphrase.
+#
+# Severity note, because it is easy to under-read: without this a FRESH INSTALL
+# crashes on first launch. An upgrade over an existing home does not, which is
+# exactly why it survived nine earlier verification passes.
+hiddenimports += collect_submodules("diceware")
+datas += collect_data_files("diceware")
+
 # insightface ships its own non-.py data under its package tree (notably
 # data/objects/meanshape_68.pkl, read by model_zoo/landmark.py's Landmark
 # class via insightface/data/pickle_object.py's get_object() -- a helper that

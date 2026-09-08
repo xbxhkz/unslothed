@@ -117,6 +117,32 @@ if ($pyinstallerExit -ne 0) { Fail "PyInstaller failed with exit code $pyinstall
 $appExe = Join-Path $Packaging "dist\Unslothed\Unslothed.exe"
 if (-not (Test-Path $appExe)) { Fail "PyInstaller produced no Unslothed.exe" }
 
+Write-Step "Placing the frontend beside the exe"
+# run.py resolves the UI as
+#   _DEFAULT_FRONTEND_PATH = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+# (run.py:1618). Frozen, run.py's __file__ is <_MEIPASS>/run.py, so parent.parent
+# is the directory ABOVE _internal\ -- i.e. beside the exe. PyInstaller's datas
+# can only write inside _internal\, so the spec's
+# (studio/frontend/dist -> studio/frontend/dist) entry lands somewhere run.py
+# never looks. No datas entry can fix this; it has to be a post-build copy.
+#
+# Found by launching the built exe WITHOUT --api-only for the first time:
+#   [ERROR] Unsloth frontend build not found.
+#   Tried: ...\dist\Unslothed\frontend\dist
+# Every prior verification used --api-only, which skips serving the UI entirely
+# -- so a build that could not show its own interface passed every check.
+#
+# Inno Setup copies dist\Unslothed\* recursively, so this copy reaches the
+# installer automatically. ~57 MB, duplicated with the _internal copy; the
+# nested one is kept because a source-tree run resolves it that way.
+$feSrc = Join-Path $Packaging "dist\Unslothed\_internal\studio\frontend\dist"
+$feDst = Join-Path $Packaging "dist\Unslothed\frontend\dist"
+if (-not (Test-Path $feSrc)) { Fail "no frontend dist inside the bundle at $feSrc -- the spec's datas entry changed?" }
+New-Item -ItemType Directory -Path (Split-Path $feDst) -Force | Out-Null
+Copy-Item $feSrc $feDst -Recurse -Force
+if (-not (Test-Path (Join-Path $feDst "index.html"))) { Fail "frontend copy produced no index.html at $feDst" }
+Write-Host "  frontend at $feDst"
+
 Write-Step "Checking warn-Unslothed.txt for missing modules"
 # PyInstaller writes this file every build, listing every import its static
 # analysis could not resolve (some tagged "(delayed)" for imports inside
