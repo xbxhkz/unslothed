@@ -81,6 +81,7 @@ export const SETTINGS_SEARCH_INDEX: Record<SettingsTab, TranslationKey[]> = {
     "settings.resources.storage.modelsFolder",
     "settings.resources.storage.futureDownloads",
     "settings.resources.storage.systemDisk",
+    "settings.resources.storage.workspaceFolder",
     "settings.resources.environment.title",
     "settings.resources.environment.backend",
     "settings.resources.environment.python",
@@ -218,6 +219,8 @@ export const SETTINGS_SEARCH_KEYWORDS: Partial<
 > = {
   "settings.resources.storage.modelsFolder":
     "settings.resources.storage.modelsFolderKeywords",
+  "settings.resources.storage.workspaceFolder":
+    "settings.resources.storage.workspaceFolderKeywords",
   // mlock, vram, ulimit and pin are in none of these labels, so search
   // missed the rows the feature is named after.
   "settings.resources.modelMemory.title":

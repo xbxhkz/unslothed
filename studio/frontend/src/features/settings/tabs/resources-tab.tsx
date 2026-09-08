@@ -36,6 +36,7 @@ import { SettingsRow } from "../components/settings-row";
 import { SettingsSection } from "../components/settings-section";
 import { useMonitorOverlayStore } from "../stores/monitor-overlay-store";
 import { useSettingsPanelPrefsStore } from "../stores/settings-panel-prefs-store";
+import { WorkspaceRootSetting } from "../workspace-root-setting";
 import { CopyIcon, FolderOpenIcon, LayersIcon } from "lucide-react";
 
 const POLL_MS = 3000;
@@ -664,6 +665,8 @@ export function ResourcesTab() {
             ) : null}
           </div>
         </SettingsRow>
+
+        <WorkspaceRootSetting />
       </SettingsSection>
 
       <FolderBrowser
