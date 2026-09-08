@@ -138,3 +138,47 @@ def classify_root(path: str) -> list[RootWarning]:
             continue
 
     return out
+
+
+WORKSPACE_ROOT_KEY = "workspace_root"
+
+
+def _read_setting(key: str, fallback = None):
+    """Indirection so tests can substitute storage without a database."""
+    from storage.studio_db import get_app_setting
+    return get_app_setting(key, fallback)
+
+
+def _write_setting(mapping: dict) -> None:
+    from storage.studio_db import upsert_app_settings
+    upsert_app_settings(mapping)
+
+
+def get_global_root() -> "str | None":
+    """The global default workspace root, or None when unset or unusable.
+
+    Returns None rather than a path in three cases that would each be worse
+    than falling through to the sandbox:
+      * unset -- the feature is opt-in, so nothing set means today's behaviour
+      * blank -- an empty string would resolve to the process cwd
+      * missing on disk -- _get_workdir calls makedirs() on whatever it returns,
+        so a stale value would silently recreate a folder the user deleted
+    """
+    raw = _read_setting(WORKSPACE_ROOT_KEY, None)
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    resolved = _real(raw.strip())
+    if not os.path.isdir(resolved):
+        return None
+    return resolved
+
+
+def set_global_root(path: "str | None") -> "str | None":
+    """Store the global default. ``None`` or blank clears it. Never refuses a
+    path -- classification is advisory and belongs to the caller."""
+    if path is None or not str(path).strip():
+        _write_setting({WORKSPACE_ROOT_KEY: None})
+        return None
+    resolved = _real(str(path).strip())
+    _write_setting({WORKSPACE_ROOT_KEY: resolved})
+    return resolved

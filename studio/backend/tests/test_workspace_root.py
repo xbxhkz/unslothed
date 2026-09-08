@@ -105,3 +105,46 @@ class TestWarnOnlyIsStructural:
         monkeypatch.setenv("USERPROFILE", str(tmp_path / "me"))
         monkeypatch.setenv("HOME", str(tmp_path / "me"))
         assert WARN_BROAD not in _codes(tmp_path / "me" / "code")
+
+
+from utils.workspace_root import WORKSPACE_ROOT_KEY, get_global_root, set_global_root
+
+
+class TestGlobalDefault:
+    def test_unset_reads_as_none(self, monkeypatch):
+        import utils.workspace_root as mod
+        monkeypatch.setattr(mod, "_read_setting", lambda key, fallback = None: fallback)
+        assert get_global_root() is None
+
+    def test_a_stored_value_is_returned_expanded(self, monkeypatch, tmp_path):
+        import utils.workspace_root as mod
+        monkeypatch.setattr(mod, "_read_setting", lambda key, fallback = None: str(tmp_path))
+        assert get_global_root() == os.path.realpath(str(tmp_path))
+
+    def test_a_blank_stored_value_reads_as_none(self, monkeypatch):
+        """An empty string must not become a workdir of "" -- that would
+        resolve to the process's cwd, which is not a directory the user chose."""
+        import utils.workspace_root as mod
+        monkeypatch.setattr(mod, "_read_setting", lambda key, fallback = None: "   ")
+        assert get_global_root() is None
+
+    def test_a_missing_directory_reads_as_none(self, monkeypatch, tmp_path):
+        """A root that no longer exists must not be returned: _get_workdir would
+        then makedirs() it and silently recreate a folder the user deleted."""
+        import utils.workspace_root as mod
+        monkeypatch.setattr(mod, "_read_setting", lambda key, fallback = None: str(tmp_path / "gone"))
+        assert get_global_root() is None
+
+    def test_setting_writes_under_the_documented_key(self, monkeypatch, tmp_path):
+        seen = {}
+        import utils.workspace_root as mod
+        monkeypatch.setattr(mod, "_write_setting", lambda mapping: seen.update(mapping))
+        set_global_root(str(tmp_path))
+        assert seen == {WORKSPACE_ROOT_KEY: os.path.realpath(str(tmp_path))}
+
+    def test_clearing_writes_none(self, monkeypatch):
+        seen = {}
+        import utils.workspace_root as mod
+        monkeypatch.setattr(mod, "_write_setting", lambda mapping: seen.update(mapping))
+        set_global_root(None)
+        assert seen == {WORKSPACE_ROOT_KEY: None}
