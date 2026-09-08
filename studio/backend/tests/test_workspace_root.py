@@ -148,3 +148,39 @@ class TestGlobalDefault:
         monkeypatch.setattr(mod, "_write_setting", lambda mapping: seen.update(mapping))
         set_global_root(None)
         assert seen == {WORKSPACE_ROOT_KEY: None}
+
+
+class TestResolutionOrder:
+    """The three-way order: project root, then global default, then sandbox."""
+
+    def test_the_global_default_is_used_when_no_project_applies(self, monkeypatch, tmp_path):
+        from core.inference import tools
+        chosen = tmp_path / "chosen"
+        chosen.mkdir()
+        monkeypatch.setattr(tools, "_project_workdir_for", lambda sid: None)
+        import utils.workspace_root as mod
+        monkeypatch.setattr(mod, "_read_setting", lambda key, fallback = None: str(chosen))
+        assert os.path.realpath(tools._get_workdir("sess-global")) == os.path.realpath(str(chosen))
+
+    def test_a_project_root_beats_the_global_default(self, monkeypatch, tmp_path):
+        from core.inference import tools
+        proj = tmp_path / "proj"; proj.mkdir()
+        glob = tmp_path / "glob"; glob.mkdir()
+        monkeypatch.setattr(tools, "_project_workdir_for", lambda sid: str(proj))
+        import utils.workspace_root as mod
+        monkeypatch.setattr(mod, "_read_setting", lambda key, fallback = None: str(glob))
+        assert os.path.realpath(tools._get_workdir("sess-both")) == os.path.realpath(str(proj))
+
+    # --- the control that protects every existing chat --------------------
+    def test_control_with_nothing_set_the_sandbox_is_unchanged(self, monkeypatch):
+        """The opt-in invariant. If this fails, the feature has changed
+        behaviour for users who never asked for it."""
+        from core.inference import tools
+        import utils.workspace_root as mod
+        monkeypatch.setattr(mod, "_read_setting", lambda key, fallback = None: None)
+        monkeypatch.setattr(tools, "_project_workdir_for", lambda sid: None)
+        first = tools._get_workdir("sess-untouched")
+        tools._workdirs.pop("sess-untouched", None)
+        second = tools._get_workdir("sess-untouched")
+        assert first == second
+        assert "sandbox" in first.lower() or tools._contained_in_root(first, tools.sandbox_root())

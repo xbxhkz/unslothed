@@ -7699,6 +7699,16 @@ def _get_project_workdir(session_id: str) -> str | None:
     return sandbox_real
 
 
+def _global_workspace_root() -> "str | None":
+    """The user's chosen global workspace root, or None. Imported lazily so a
+    storage failure cannot break tool dispatch."""
+    try:
+        from utils.workspace_root import get_global_root
+        return get_global_root()
+    except Exception:
+        return None
+
+
 # Dropped in every session directory we create. The root can be an existing
 # shared folder the user pointed us at, and a chat id can name something already
 # in there; this is the only evidence the directory is ours to delete.
@@ -8430,15 +8440,25 @@ def _get_workdir(session_id: str | None = None) -> str:
         _start_legacy_migration()
         _start_detached_sweep()
         project_workdir = _project_workdir_for(session_id)
+        # Resolved once, not called twice in the branch below: it reads the
+        # database, and two calls could disagree if the setting changed between
+        # them -- the test would still pass and the workdir would be whichever
+        # answer arrived second.
+        global_workdir = None if project_workdir else _global_workspace_root()
         if project_workdir:
             workdir = project_workdir
+        elif global_workdir:
+            # A directory the user chose in Settings. Second in the order: a
+            # project's own root is more specific and wins. Falls through to
+            # the sandbox when unset, so this is opt-in.
+            workdir = global_workdir
         elif session_id:
             workdir = _ensure_session_dir(sandbox_root_path, session_id)
         else:
             workdir = _sandbox_fallback(sandbox_root_path, "_default", create = True)
         created = not os.path.isdir(workdir)
         os.makedirs(workdir, exist_ok = True)
-        if not project_workdir and not session_id:
+        if not project_workdir and not global_workdir and not session_id:
             # The fallbacks are directories like any other: claimed, so the next
             # run knows this one is the one we made.
             _claim_sandbox(workdir, "_default")
