@@ -58,22 +58,37 @@ export function useWorkspaceRootField({
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
+  // Exposed as `reload` too: a caller that keeps this hook mounted across
+  // opens (a dialog toggled by `open`, rather than mounted fresh each time)
+  // needs a way to re-fetch instead of showing whatever was left over --
+  // possibly an abandoned, never-saved draft -- from the previous open.
+  const runLoad = useCallback(
+    (signal: { cancelled: boolean }) => {
+      setProblem("");
+      setSaved(false);
+      void load().then((result) => {
+        if (signal.cancelled) return;
+        setLoaded(true);
+        if (!result) {
+          setProblem(messages.loadFailed);
+          return;
+        }
+        setPath(result.path ?? "");
+        setWarnings(result.warnings);
+      });
+    },
+    [load, messages.loadFailed],
+  );
+
   useEffect(() => {
-    let cancelled = false;
-    void load().then((result) => {
-      if (cancelled) return;
-      setLoaded(true);
-      if (!result) {
-        setProblem(messages.loadFailed);
-        return;
-      }
-      setPath(result.path ?? "");
-      setWarnings(result.warnings);
-    });
+    const signal = { cancelled: false };
+    runLoad(signal);
     return () => {
-      cancelled = true;
+      signal.cancelled = true;
     };
-  }, [load, messages.loadFailed]);
+  }, [runLoad]);
+
+  const reload = useCallback(() => runLoad({ cancelled: false }), [runLoad]);
 
   const runPreview = useCallback(
     async (candidate: string) => {
@@ -137,5 +152,6 @@ export function useWorkspaceRootField({
     preview: runPreview,
     save: commit,
     clear,
+    reload,
   };
 }

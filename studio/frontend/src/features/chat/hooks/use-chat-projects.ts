@@ -112,7 +112,10 @@ export function useChatProjects(): {
     window.addEventListener(CHAT_PROJECTS_UPDATED_EVENT, onProjectsUpdated);
     return () => {
       cancelled = true;
-      window.removeEventListener(CHAT_PROJECTS_UPDATED_EVENT, onProjectsUpdated);
+      window.removeEventListener(
+        CHAT_PROJECTS_UPDATED_EVENT,
+        onProjectsUpdated,
+      );
     };
   }, []);
 
@@ -136,7 +139,22 @@ export async function updateChatProjectInstructions(
   projectId: string,
   instructions: string,
 ): Promise<void> {
-  await updateStoredChatProject(projectId, { instructions: instructions.trim() });
+  await updateStoredChatProject(projectId, {
+    instructions: instructions.trim(),
+  });
+}
+
+/**
+ * Re-point a project's own working folder. `null` clears it, falling back to
+ * the global workspace folder (or the sandbox, if that is unset too). Never
+ * moves files: whatever the project's chats already wrote stays in the
+ * folder they were written to.
+ */
+export async function updateChatProjectRootPath(
+  projectId: string,
+  rootPath: string | null,
+): Promise<ProjectRecord> {
+  return updateStoredChatProject(projectId, { rootPath });
 }
 
 export async function deleteChatProject(

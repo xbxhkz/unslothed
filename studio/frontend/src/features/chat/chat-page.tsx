@@ -138,6 +138,7 @@ import { ChatModelNotice } from "./components/chat-model-notice";
 import { chatModelSwitchMeta } from "./components/chat-model-notice-switch";
 import { ContextUsageBar } from "./components/context-usage-bar";
 import { ModelLoadInlineStatus } from "./components/model-load-status";
+import { ProjectFolderDialog } from "./components/project-folder-dialog";
 import { ProjectSwitcher } from "./components/project-switcher";
 import {
   buildExternalModelId,
@@ -1170,6 +1171,7 @@ function ProjectLanding({
   const [renamingProject, setRenamingProject] = useState(false);
   const [projectNameDraft, setProjectNameDraft] = useState("");
   const [deletingProject, setDeletingProject] = useState(false);
+  const [editingProjectFolder, setEditingProjectFolder] = useState(false);
 
   async function handleProjectExport(
     format: ProjectChatExportFormat,
@@ -1513,6 +1515,10 @@ function ProjectLanding({
                   >
                     <HugeiconsIcon icon={Edit03Icon} strokeWidth={1.75} className="size-icon" />
                     <span>Rename project</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setEditingProjectFolder(true)}>
+                    <HugeiconsIcon icon={Folder02Icon} strokeWidth={1.75} className="size-icon" />
+                    <span>Project folder</span>
                   </DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => togglePinProject(projectId)}>
                     <HugeiconsIcon icon={projectPinned ? PinOffIcon : PinIcon} strokeWidth={1.75} className="size-icon" />
@@ -1911,6 +1917,12 @@ function ProjectLanding({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <ProjectFolderDialog
+        projectId={projectId}
+        projectName={projectName}
+        open={active && editingProjectFolder}
+        onOpenChange={setEditingProjectFolder}
+      />
     </ChatRuntimeProvider>
   );
 }

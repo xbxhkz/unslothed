@@ -67,3 +67,11 @@ export type { ShortcutId } from "./lib/keyboard-shortcuts";
 export { useSettingsDialogStore } from "./stores/settings-dialog-store";
 export type { SettingsTab } from "./stores/settings-dialog-store";
 export type { Palette, ResolvedTheme, Theme } from "./stores/theme-store";
+export { previewWorkspaceRoot } from "./api/workspace-root";
+export type {
+  WorkspaceRootPreview,
+  WorkspaceRootState,
+  WorkspaceRootWarning,
+} from "./api/workspace-root";
+export { useWorkspaceRootField } from "./hooks/use-workspace-root-field";
+export type { UseWorkspaceRootFieldOptions } from "./hooks/use-workspace-root-field";
