@@ -76,5 +76,79 @@ class TestGlobalRootEndpoints:
 
 class TestProjectPatchModel:
     def test_chatprojectpatch_accepts_rootpath(self):
+        """A cheap structural smoke check -- the two tests below are the real
+        coverage, exercising the field through the model, model_dump, storage
+        and the persisted row. This one just fails fast on an outright typo."""
         from routes.chat_history import ChatProjectPatch
         assert "rootPath" in ChatProjectPatch.model_fields
+
+
+class TestProjectPatchRootPathWiring:
+    """Behavioural coverage for ChatProjectPatch.rootPath: through the
+    Pydantic model, model_dump(exclude_unset = True), update_chat_project, to
+    the row PATCH /projects/{id} actually persists.
+
+    Calls the route function directly (as test_project_workspace_location.py's
+    test_creating_a_project_says_which_folder_failed does for save_project)
+    rather than through a TestClient: current_subject is a plain keyword here,
+    not a Depends() the ASGI layer resolves, so there is no auth wiring to
+    stand up for a route this module does not otherwise touch.
+    """
+
+    def _make_project(self, tmp_path, monkeypatch):
+        import time
+
+        from routes.chat_history import ChatProject, save_project
+
+        # Otherwise project creation writes into the real user's Documents
+        # folder -- this is the only thing Studio writes there.
+        monkeypatch.setenv("UNSLOTH_STUDIO_PROJECTS_HOME", str(tmp_path / "projects_home"))
+        now = int(time.time() * 1000)
+        project = save_project(
+            ChatProject(
+                id = "11111111-2222-3333-4444-555555555555",
+                name = "Probe",
+                instructions = "",
+                archived = False,
+                createdAt = now,
+                updatedAt = now,
+            ),
+            current_subject = "test-subject",
+        )
+        return project.id
+
+    def test_patching_rootpath_changes_the_persisted_value(self, tmp_path, monkeypatch):
+        from routes.chat_history import ChatProjectPatch, patch_project
+        from storage.studio_db import get_chat_project
+
+        project_id = self._make_project(tmp_path, monkeypatch)
+        chosen_root = tmp_path / "chosen-root"
+
+        patch_project(
+            project_id,
+            ChatProjectPatch(rootPath = str(chosen_root)),
+            current_subject = "test-subject",
+        )
+
+        stored = get_chat_project(project_id)
+        assert Path(stored["rootPath"]) == chosen_root.resolve()
+
+    def test_omitting_rootpath_leaves_the_stored_root_untouched(self, tmp_path, monkeypatch):
+        """Patching an unrelated field must not clobber rootPath. This is what
+        proves exclude_unset is doing its job: a naive model_dump() without it
+        would serialize the omitted rootPath as None and wipe the stored root."""
+        from routes.chat_history import ChatProjectPatch, patch_project
+        from storage.studio_db import get_chat_project
+
+        project_id = self._make_project(tmp_path, monkeypatch)
+        root_before = get_chat_project(project_id)["rootPath"]
+
+        patch_project(
+            project_id,
+            ChatProjectPatch(name = "Renamed"),
+            current_subject = "test-subject",
+        )
+
+        after = get_chat_project(project_id)
+        assert after["rootPath"] == root_before
+        assert after["name"] == "Renamed"
