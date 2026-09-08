@@ -210,6 +210,17 @@ class TestProjectRoot:
         )
         assert os.path.realpath(resolved) == os.path.realpath(str(chosen))
 
+    def test_a_blank_supplied_root_falls_through_to_the_default(self, tmp_path, monkeypatch):
+        """A whitespace-only rootPath is not a real choice -- it must not win
+        over the generated default, the same way an unset one must not."""
+        from storage import studio_db
+        monkeypatch.setattr(studio_db, "_ensure_project_workspace", lambda p: os.path.realpath(p))
+        monkeypatch.setattr(studio_db, "_default_project_root", lambda proj: str(tmp_path / "DEFAULT"))
+        resolved = studio_db._resolve_project_root(
+            {"id": "p1", "name": "P", "rootPath": "   "}, existing = None
+        )
+        assert os.path.realpath(resolved) == os.path.realpath(str(tmp_path / "DEFAULT"))
+
     def test_an_existing_root_is_kept_when_none_is_supplied(self, tmp_path, monkeypatch):
         from storage import studio_db
         monkeypatch.setattr(studio_db, "_ensure_project_workspace", lambda p: os.path.realpath(p))
@@ -217,6 +228,23 @@ class TestProjectRoot:
             {"id": "p1", "name": "P"}, existing = {"rootPath": str(tmp_path / "old")}
         )
         assert os.path.realpath(resolved) == os.path.realpath(str(tmp_path / "old"))
+
+    def test_a_supplied_root_does_not_override_an_existing_one(self, tmp_path, monkeypatch):
+        """The anti-relocation guarantee. An established project's files are
+        already in its folder, so upsert must never move it -- re-pointing is
+        PATCH's job. Without this test, swapping the branch order in
+        _resolve_project_root would pass every other test in the suite.
+        """
+        from storage import studio_db
+        old = tmp_path / "old"; old.mkdir()
+        new = tmp_path / "new"; new.mkdir()
+        monkeypatch.setattr(studio_db, "_ensure_project_workspace", lambda p: os.path.realpath(p))
+        resolved = studio_db._resolve_project_root(
+            {"id": "p1", "name": "P", "rootPath": str(new)},
+            existing = {"rootPath": str(old)},
+        )
+        assert os.path.realpath(resolved) == os.path.realpath(str(old))
+        assert os.path.realpath(resolved) != os.path.realpath(str(new))
 
     def test_rootpath_is_patchable(self, tmp_path):
         """Behavioural, not structural: writes a row through the real (per-test
