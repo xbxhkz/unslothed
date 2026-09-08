@@ -171,6 +171,18 @@ class TestResolutionOrder:
         monkeypatch.setattr(mod, "_read_setting", lambda key, fallback = None: str(glob))
         assert os.path.realpath(tools._get_workdir("sess-both")) == os.path.realpath(str(proj))
 
+    def test_a_session_less_call_does_not_use_the_global_root(self, monkeypatch, tmp_path):
+        """An anonymous caller gets the sandbox, never the user's chosen folder.
+        This is also what keeps _claim_sandbox from marking a directory Studio
+        does not own -- which is why the guard below it needs no edit."""
+        from core.inference import tools
+        chosen = tmp_path / "chosen"; chosen.mkdir()
+        monkeypatch.setattr(tools, "_project_workdir_for", lambda sid: None)
+        import utils.workspace_root as mod
+        monkeypatch.setattr(mod, "_read_setting", lambda key, fallback = None: str(chosen))
+        result = tools._get_workdir(None)
+        assert os.path.realpath(result) != os.path.realpath(str(chosen))
+
     # --- the control that protects every existing chat --------------------
     def test_control_with_nothing_set_the_sandbox_is_unchanged(self, monkeypatch):
         """The opt-in invariant. If this fails, the feature has changed

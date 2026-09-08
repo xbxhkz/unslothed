@@ -8447,10 +8447,12 @@ def _get_workdir(session_id: str | None = None) -> str:
         global_workdir = None if project_workdir else _global_workspace_root()
         if project_workdir:
             workdir = project_workdir
-        elif global_workdir:
+        elif session_id and global_workdir:
             # A directory the user chose in Settings. Second in the order: a
             # project's own root is more specific and wins. Falls through to
-            # the sandbox when unset, so this is opt-in.
+            # the sandbox when unset, so this is opt-in. Gated on session_id
+            # so a session-less call never reaches it -- that keeps it out of
+            # the _claim_sandbox guard below, which stays untouched.
             workdir = global_workdir
         elif session_id:
             workdir = _ensure_session_dir(sandbox_root_path, session_id)
@@ -8458,7 +8460,7 @@ def _get_workdir(session_id: str | None = None) -> str:
             workdir = _sandbox_fallback(sandbox_root_path, "_default", create = True)
         created = not os.path.isdir(workdir)
         os.makedirs(workdir, exist_ok = True)
-        if not project_workdir and not global_workdir and not session_id:
+        if not project_workdir and not session_id:
             # The fallbacks are directories like any other: claimed, so the next
             # run knows this one is the one we made.
             _claim_sandbox(workdir, "_default")
