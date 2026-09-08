@@ -196,3 +196,67 @@ class TestResolutionOrder:
         second = tools._get_workdir("sess-untouched")
         assert first == second
         assert "sandbox" in first.lower() or tools._contained_in_root(first, tools.sandbox_root())
+
+
+class TestProjectRoot:
+    def test_a_supplied_root_is_honoured_at_creation(self, tmp_path, monkeypatch):
+        from storage import studio_db
+        chosen = tmp_path / "mycode"; chosen.mkdir()
+        captured = {}
+        monkeypatch.setattr(studio_db, "get_chat_project", lambda pid: captured.get(pid))
+        monkeypatch.setattr(studio_db, "_ensure_project_workspace", lambda p: os.path.realpath(p))
+        resolved = studio_db._resolve_project_root(
+            {"id": "p1", "name": "P", "rootPath": str(chosen)}, existing = None
+        )
+        assert os.path.realpath(resolved) == os.path.realpath(str(chosen))
+
+    def test_an_existing_root_is_kept_when_none_is_supplied(self, tmp_path, monkeypatch):
+        from storage import studio_db
+        monkeypatch.setattr(studio_db, "_ensure_project_workspace", lambda p: os.path.realpath(p))
+        resolved = studio_db._resolve_project_root(
+            {"id": "p1", "name": "P"}, existing = {"rootPath": str(tmp_path / "old")}
+        )
+        assert os.path.realpath(resolved) == os.path.realpath(str(tmp_path / "old"))
+
+    def test_rootpath_is_patchable(self, tmp_path):
+        """Behavioural, not structural: writes a row through the real (per-test
+        isolated) sqlite database, patches rootPath through update_chat_project,
+        and reads it back -- so a rootPath entry wired to the wrong column, or
+        never persisted, fails this even though the string "rootPath" would
+        still appear in the source.
+        """
+        from storage import studio_db
+        conn = studio_db.get_connection()
+        try:
+            conn.execute(
+                """
+                INSERT INTO chat_projects
+                    (id, name, instructions, root_path, archived, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                ("p1", "P", "", str(tmp_path / "old"), 0, 1_700_000_000_000, 1_700_000_000_000),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        new_root = str(tmp_path / "new")
+        updated = studio_db.update_chat_project("p1", {"rootPath": new_root})
+
+        assert updated is not None
+        assert updated["rootPath"] == new_root
+        assert studio_db.get_chat_project("p1")["rootPath"] == new_root
+
+    # --- negative control -------------------------------------------------
+    def test_control_a_supplied_root_beats_the_default(self, tmp_path, monkeypatch):
+        """The whole defect being fixed: the old code computed
+        _default_project_root and ignored the caller. If the default wins here,
+        nothing has changed."""
+        from storage import studio_db
+        chosen = tmp_path / "mycode"; chosen.mkdir()
+        monkeypatch.setattr(studio_db, "_ensure_project_workspace", lambda p: os.path.realpath(p))
+        monkeypatch.setattr(studio_db, "_default_project_root", lambda proj: str(tmp_path / "DEFAULT"))
+        resolved = studio_db._resolve_project_root(
+            {"id": "p1", "name": "P", "rootPath": str(chosen)}, existing = None
+        )
+        assert "DEFAULT" not in resolved

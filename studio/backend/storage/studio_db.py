@@ -2250,12 +2250,25 @@ def count_chat_threads() -> int:
         conn.close()
 
 
+def _resolve_project_root(project: dict, existing: "Optional[dict]") -> str:
+    """The root a project should use.
+
+    Precedence: an explicitly supplied rootPath (a new project the user pointed
+    somewhere), then the stored one (never silently relocate an established
+    project -- its files are already in there), then the generated default.
+    """
+    supplied = (project.get("rootPath") or "").strip() if project.get("rootPath") else ""
+    stored = existing.get("rootPath") if existing else None
+    if supplied and not stored:
+        return _ensure_project_workspace(supplied)
+    if stored:
+        return _ensure_project_workspace(stored)
+    return _ensure_project_workspace(_default_project_root(project))
+
+
 def upsert_chat_project(project: dict) -> dict:
     existing = get_chat_project(project["id"])
-    root_path = existing.get("rootPath") if existing else None
-    if not root_path:
-        root_path = _default_project_root(project)
-    root_path = _ensure_project_workspace(root_path)
+    root_path = _resolve_project_root(project, existing)
     conn = get_connection()
     try:
         conn.execute(
@@ -2291,6 +2304,7 @@ def update_chat_project(id: str, patch: dict) -> Optional[dict]:
     allowed = {
         "name": ("name", patch.get("name")),
         "instructions": ("instructions", patch.get("instructions")),
+        "rootPath": ("root_path", patch.get("rootPath")),
         "archived": ("archived", 1 if patch.get("archived") else 0),
         "createdAt": ("created_at", patch.get("createdAt")),
         "updatedAt": ("updated_at", patch.get("updatedAt")),
