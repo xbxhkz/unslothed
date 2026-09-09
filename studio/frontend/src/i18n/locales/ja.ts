@@ -131,6 +131,8 @@ export const ja = {
       deleteDescription: "{count} 件のチャットを削除しますか。元に戻せません。",
       deleteFilesDescription:
         "各チャット専用のサンドボックスフォルダーがディスクから削除されます。プロジェクト内で作成したファイルは、そのプロジェクトのワークスペースに残ります。",
+      deleteProjectFolderKeptDescription:
+        "チャットは削除されます。選択したフォルダー({path})はディスクに残ります。",
       deleteFilesLabel: "ファイルとサンドボックスフォルダーを削除",
       deleteChatFilesDescription:
         "このチャット専用のサンドボックスフォルダーがディスクから削除されます。プロジェクト内に書き込んだファイルは、そのプロジェクトのワークスペースに残ります。",

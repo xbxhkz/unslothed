@@ -267,6 +267,29 @@ def _like_escape(value: str) -> str:
     return value
 
 
+def project_workspace_is_deletable(root_path: str, project_id: str) -> bool:
+    """Whether the delete guard's name rule allows removing this workspace.
+
+    Studio only ever generates roots shaped ``<slug>-<suffix>``, where suffix
+    comes from the project id (see ``_default_project_root``). A root the user
+    pointed the project at directly matches that shape only by coincidence, so
+    this is a name check, not an ownership check -- deliberately, since it is
+    also the one rule ``_delete_project_workspace`` enforces and the answer the
+    delete-project dialog needs before it can promise a folder will go away.
+
+    Never raises. A path that cannot be resolved reads as not deletable, which
+    is the same "skip it" outcome ``_delete_project_workspace`` falls back to.
+    """
+    if not root_path:
+        return False
+    try:
+        root_resolved = Path(root_path).expanduser().resolve(strict = False)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    suffix = re.sub(r"[^A-Za-z0-9_-]+", "-", str(project_id))[:8].strip("-_") or "project"
+    return root_resolved.name.endswith(f"-{suffix}")
+
+
 def delete_project_workspace(project: dict) -> None:
     """Remove a deleted project's workspace directory.
 
@@ -289,8 +312,7 @@ def _delete_project_workspace(project: dict) -> None:
         return
 
     project_id = str(project["id"])
-    suffix = re.sub(r"[^A-Za-z0-9_-]+", "-", project_id)[:8].strip("-_") or "project"
-    if not root_resolved.name.endswith(f"-{suffix}"):
+    if not project_workspace_is_deletable(str(root_resolved), project_id):
         logger.warning(
             "Skipping project workspace delete for unexpected project path %s",
             root_resolved,
@@ -1734,6 +1756,12 @@ def _chat_project_from_row(row: sqlite3.Row) -> dict:
         "instructions": data.get("instructions") or "",
         "rootPath": root_path or None,
         "sandboxPath": _project_sandbox_path(root_path) if root_path else None,
+        # Same rule the delete route enforces (project_workspace_is_deletable):
+        # whether "also delete files" will actually remove this folder, so the
+        # delete-project dialog can say so instead of promising it for every root.
+        "filesDeletable": (
+            project_workspace_is_deletable(root_path, str(data["id"])) if root_path else False
+        ),
         "archived": bool(data["archived"]),
         "createdAt": data["created_at"],
         "updatedAt": data["updated_at"],

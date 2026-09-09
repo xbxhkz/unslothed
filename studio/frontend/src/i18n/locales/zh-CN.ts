@@ -127,6 +127,8 @@ export const zhCN = {
       deleteDescription: "删除 {count} 个对话？此操作无法撤销。",
       deleteFilesDescription:
         "每个对话自己的沙盒文件夹会从磁盘中删除。它们在项目内写入的文件仍保留在该项目的工作区中。",
+      deleteProjectFolderKeptDescription:
+        "对话将被删除。您选择的文件夹({path})将保留在磁盘上。",
       deleteFilesLabel: "删除文件和沙盒文件夹",
       deleteChatFilesDescription:
         "此对话自己的沙盒文件夹将从磁盘中移除。它在项目中写入的文件仍保留在该项目的工作区内。",

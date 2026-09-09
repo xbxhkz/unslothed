@@ -274,6 +274,9 @@ class ChatProject(BaseModel):
     instructions: str = ""
     rootPath: Optional[str] = None
     sandboxPath: Optional[str] = None
+    # Whether "also delete files" will actually remove rootPath on delete -- see
+    # storage.studio_db.project_workspace_is_deletable, the one rule this mirrors.
+    filesDeletable: bool = False
     archived: bool = False
     createdAt: int
     updatedAt: int

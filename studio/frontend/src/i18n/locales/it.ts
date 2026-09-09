@@ -96,6 +96,8 @@ export const it = {
       deleteDescription: "Eliminare {count} chat? L'operazione non è reversibile.",
       deleteFilesDescription:
         "La cartella sandbox di ogni chat viene rimossa dal disco. I file scritti dentro un progetto restano nello spazio di lavoro di quel progetto.",
+      deleteProjectFolderKeptDescription:
+        "Le chat verranno eliminate. La cartella che hai scelto ({path}) resta sul disco.",
       deleteFilesLabel: "Elimina i file e la cartella sandbox",
       deleteChatFilesDescription:
         "La cartella sandbox di questa chat viene rimossa dal disco. I file scritti all'interno di un progetto restano nello spazio di lavoro del progetto.",

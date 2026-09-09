@@ -128,6 +128,8 @@ export const en = {
       deleteDescription: "Delete {count} chats? This cannot be undone.",
       deleteFilesDescription:
         "Each chat's own sandbox folder is removed from disk. Files they wrote inside a project stay in that project's workspace.",
+      deleteProjectFolderKeptDescription:
+        "Chats will be deleted. The folder you chose ({path}) is left on disk.",
       deleteFilesLabel: "Delete files and sandbox folder",
       deleteChatFilesDescription:
         "This chat's own sandbox folder is removed from disk. Files it wrote inside a project stay in that project's workspace.",

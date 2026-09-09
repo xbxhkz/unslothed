@@ -4002,8 +4002,14 @@ export function AppSidebar() {
               </span>
               <span className="block break-words text-xs leading-5 text-muted-foreground">
                 {confirmingDelete?.kind === "project"
-                  ? (confirmingDelete.project.rootPath ??
-                    "The project workspace folder will be removed from disk.")
+                  ? confirmingDelete.project.filesDeletable
+                    ? (confirmingDelete.project.rootPath ??
+                      t("shell.selection.deleteFilesDescription"))
+                    : confirmingDelete.project.rootPath
+                      ? t("shell.selection.deleteProjectFolderKeptDescription", {
+                          path: confirmingDelete.project.rootPath,
+                        })
+                      : t("shell.selection.deleteFilesDescription")
                   : confirmingDelete?.kind === "projects"
                     ? t("shell.selection.deleteProjectsFilesDescription")
                     : confirmingDelete?.kind === "chats"

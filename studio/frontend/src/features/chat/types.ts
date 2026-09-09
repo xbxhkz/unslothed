@@ -22,6 +22,10 @@ export interface ProjectRecord {
   instructions?: string;
   rootPath?: string | null;
   sandboxPath?: string | null;
+  /** Whether "also delete files" will actually remove rootPath on delete. See
+   *  storage.studio_db.project_workspace_is_deletable on the backend -- this
+   *  mirrors that one rule rather than re-testing the path shape here. */
+  filesDeletable?: boolean;
   archived: boolean;
   createdAt: number;
   updatedAt: number;

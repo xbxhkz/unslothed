@@ -11,6 +11,7 @@ they do.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -486,6 +487,90 @@ class TestWhereAProjectRootPutsTheAi:
         assert err is None and confined is not None, (
             "a file in the chosen folder must be readable from it"
         )
+
+
+class TestProjectWorkspaceIsDeletable:
+    """The one rule that gates the delete-project route's ``shutil.rmtree``.
+
+    ``_delete_project_workspace`` calls ``project_workspace_is_deletable``
+    instead of carrying the name-suffix check inline, and the delete-project
+    dialog's ``filesDeletable`` flag is computed by the very same call -- so
+    this is the single place either has to be right.
+    """
+
+    def test_an_auto_generated_root_is_deletable(self, tmp_path, monkeypatch):
+        from storage import studio_db
+        monkeypatch.setenv("UNSLOTH_STUDIO_PROJECTS_HOME", str(tmp_path / "projects_home"))
+        generated = studio_db._default_project_root({"id": "p-auto", "name": "Auto"})
+        assert studio_db.project_workspace_is_deletable(generated, "p-auto") is True
+
+    def test_a_user_chosen_root_is_not_deletable(self, tmp_path):
+        """The defect this predicate exists to fix: a folder the user pointed
+        the project at directly does not end in `-<suffix>`, so the guard --
+        correctly -- refuses to remove it. The dialog must say so instead of
+        promising this path will go away."""
+        from storage import studio_db
+        chosen = tmp_path / "myrepo"
+        assert studio_db.project_workspace_is_deletable(str(chosen), "p-chosen") is False
+
+    def test_a_user_folder_that_happens_to_end_with_the_suffix_is_still_deletable(
+        self, tmp_path
+    ):
+        """The boundary case. This is a name check, not an ownership check:
+        Studio cannot tell a folder it generated from one a user happened to
+        name the same way, and by design it does not try. Pinned here as
+        known, accepted behaviour rather than left implicit."""
+        from storage import studio_db
+        project_id = "11111111-aaaa-bbbb-cccc-222222222222"
+        suffix = re.sub(r"[^A-Za-z0-9_-]+", "-", project_id)[:8].strip("-_")
+        coincidence = tmp_path / f"myrepo-{suffix}"
+        assert studio_db.project_workspace_is_deletable(str(coincidence), project_id) is True
+
+    def test_a_missing_root_path_is_not_deletable(self):
+        """No folder of its own -- e.g. a project cleared back to the global
+        default -- has nothing for the suffix check to match."""
+        from storage import studio_db
+        assert studio_db.project_workspace_is_deletable("", "p-none") is False
+
+    def test_an_unresolvable_path_is_not_deletable(self, monkeypatch):
+        """Mirrors _delete_project_workspace's own fallback: a path that
+        cannot be resolved must read as "leave it alone", not raise."""
+        from storage import studio_db
+
+        def boom(*args, **kwargs):
+            raise OSError("cannot resolve")
+
+        monkeypatch.setattr(studio_db.Path, "resolve", boom)
+        assert studio_db.project_workspace_is_deletable("C:\\anything", "p-boom") is False
+
+
+class TestChatProjectFromRowExposesFilesDeletable:
+    """The predicate's actual consumer: what the row mapper hands the API,
+    and from there the delete-project dialog."""
+
+    def test_an_auto_generated_project_row_is_files_deletable(self, tmp_path, monkeypatch):
+        from storage import studio_db
+        monkeypatch.setenv("UNSLOTH_STUDIO_PROJECTS_HOME", str(tmp_path / "projects_home"))
+        generated = studio_db._default_project_root({"id": "p-row-auto", "name": "Auto"})
+        _insert_project("p-row-auto", "Auto", generated)
+        project = studio_db.get_chat_project("p-row-auto")
+        assert project is not None
+        assert project["filesDeletable"] is True
+
+    def test_a_user_chosen_project_row_is_not_files_deletable(self, tmp_path):
+        from storage import studio_db
+        chosen = tmp_path / "myrepo"
+        _insert_project("p-row-chosen", "My Repo", str(chosen))
+        project = studio_db.get_chat_project("p-row-chosen")
+        assert project is not None
+        assert project["filesDeletable"] is False
+
+    def test_a_project_row_with_no_root_is_not_files_deletable(self):
+        from storage import studio_db
+        _insert_project("p-row-none", "No Root", None)
+        project = studio_db.get_chat_project("p-row-none")
+        assert project is not None
+        assert project["filesDeletable"] is False
 
 
 class TestAClearedProjectRoot:
