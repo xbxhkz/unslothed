@@ -117,6 +117,46 @@ def _default_project_root(project: dict) -> str:
     return str(project_workspaces_root() / folder_name)
 
 
+def _is_user_chosen_root(root_path: str) -> bool:
+    """Whether the user picked this root, or Studio generated it.
+
+    ``_default_project_root`` always lands inside ``project_workspaces_root()``,
+    so a root outside that tree is one the user chose. Compared as resolved path
+    components, and case-folded where the filesystem is: a string prefix would
+    call ``Projects-old`` a child of ``Projects``.
+
+    Never raises. A path that cannot be resolved reads as generated, which keeps
+    the ``sandbox`` subfolder every project already created that way is using.
+    """
+    if not root_path:
+        return False
+    try:
+        generated = os.path.normcase(os.path.realpath(str(project_workspaces_root())))
+        candidate = os.path.normcase(os.path.realpath(os.path.expanduser(str(root_path))))
+    except (OSError, ValueError):
+        return False
+    if candidate == generated:
+        return False
+    return not candidate.startswith(generated.rstrip(os.sep) + os.sep)
+
+
+def _project_sandbox_path(root_path: str) -> str:
+    """The directory a project's chats actually work in.
+
+    A root the user chose IS that directory. The whole point of pointing a
+    project at ``C:\\code\\myrepo`` is that the AI sees the repo, not a freshly
+    created empty subfolder of it -- and ``tools._get_project_workdir``
+    explicitly permits ``sandbox == root``.
+
+    A root Studio generated keeps its ``sandbox`` subfolder: every project made
+    that way already has files in there, and moving it to the root would strand
+    them. That carve-out is the anti-relocation guarantee, not an optimisation.
+    """
+    if _is_user_chosen_root(root_path):
+        return root_path
+    return os.path.join(root_path, "sandbox")
+
+
 class ProjectWorkspaceError(OSError):
     """Raised when a project's workspace folder cannot be created.
 
@@ -125,20 +165,44 @@ class ProjectWorkspaceError(OSError):
     different fix.
     """
 
-    def __init__(self, path: str, cause: OSError):
+    def __init__(self, path: str, cause: Exception):
         super().__init__(str(cause))
         self.path = path
 
 
 def _ensure_project_workspace(root_path: str) -> str:
-    root = Path(root_path).expanduser()
+    # Named before the expansion that can itself fail, so the error carries the
+    # folder either way.
+    named = str(root_path)
     try:
+        root = Path(root_path).expanduser()
+        named = str(root)
         root_resolved = ensure_dir(root).resolve()
-        for subdir in _PROJECT_WORKSPACE_SUBDIRS:
-            ensure_dir(root_resolved / subdir)
-    except OSError as exc:
-        raise ProjectWorkspaceError(str(root), exc) from exc
+        if not _is_user_chosen_root(str(root_resolved)):
+            # Only a root we generated gets the subfolder: it is the directory
+            # that project's chats work in. A root the user chose IS that
+            # directory (see _project_sandbox_path), so creating `sandbox`
+            # inside it would leave an empty folder in the user's own project
+            # that nothing ever writes to.
+            for subdir in _PROJECT_WORKSPACE_SUBDIRS:
+                ensure_dir(root_resolved / subdir)
+    except (OSError, ValueError) as exc:
+        # ValueError as well as OSError: Path() raises it on an embedded NUL,
+        # and an unhandled one here propagates out of every route that lists a
+        # project rather than being reported as the bad folder it is.
+        raise ProjectWorkspaceError(named, exc) from exc
     return str(root_resolved)
+
+
+def prepare_project_root(root_path: str) -> str:
+    """Create and resolve a root before it is stored.
+
+    The PATCH route validates through this so a folder that cannot be used is
+    refused at the request that supplied it. Committing it first and only then
+    finding out leaves the bad value in the row, where it 500s every later read
+    of the project list -- the one place the user could go to fix it.
+    """
+    return _ensure_project_workspace(root_path)
 
 
 def sandbox_is_referenced_elsewhere(
@@ -1669,7 +1733,7 @@ def _chat_project_from_row(row: sqlite3.Row) -> dict:
         "name": data["name"],
         "instructions": data.get("instructions") or "",
         "rootPath": root_path or None,
-        "sandboxPath": os.path.join(root_path, "sandbox") if root_path else None,
+        "sandboxPath": _project_sandbox_path(root_path) if root_path else None,
         "archived": bool(data["archived"]),
         "createdAt": data["created_at"],
         "updatedAt": data["updated_at"],
@@ -2331,10 +2395,42 @@ def update_chat_project(id: str, patch: dict) -> Optional[dict]:
         conn.close()
 
 
+def _global_workspace_root() -> Optional[str]:
+    """The folder the user chose in Settings, or None when none is set.
+
+    Imported here rather than at module scope because utils.workspace_root
+    reads its value back out of this module.
+    """
+    from utils.workspace_root import get_global_root
+    return get_global_root()
+
+
 def ensure_chat_project_workspace(id: str) -> Optional[dict]:
     project = get_chat_project(id)
     if project is None:
         return None
+    if not project.get("rootPath"):
+        # No folder of its own. "Clear (use the global folder)" says the project
+        # falls through to the global workspace folder, and so does
+        # use-chat-projects.ts -- generating a Documents folder here instead is
+        # what made that promise false.
+        #
+        # Deliberately not written back to the row: storing today's global
+        # folder would pin the project to it, so a later change to the global
+        # folder would stop reaching this project, and the project's own delete
+        # would then be aimed at a folder the user never created for it.
+        # Resolution continues in tools._get_workdir, which reads a project with
+        # no root as "the global folder, then the sandbox".
+        try:
+            inherits_global = _global_workspace_root() is not None
+        except Exception:  # noqa: BLE001 - see below
+            # Could not tell. Generating a root here would silently undo a
+            # Clear the user asked for, and that write is permanent; leaving
+            # the row alone costs one resolution falling through to the sandbox
+            # and is undone by the next successful read.
+            return project
+        if inherits_global:
+            return project
     root_path = project.get("rootPath") or _default_project_root(project)
     root_path = _ensure_project_workspace(root_path)
     # a delete running in another threadpool worker can drop the row at any point before the

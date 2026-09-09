@@ -920,7 +920,7 @@ export const zhCN = {
         cachePickerError: "无法打开文件夹选择器",
         workspaceFolder: "Workspace folder",
         workspaceFolderDescription: "Where chats outside a project work, instead of their own sandbox.",
-        workspaceFolderHint: "Leave empty to keep chats in their own sandbox. Setting this does not move files from chats that already exist -- only new work uses it. A project can set its own folder, which overrides this one.",
+        workspaceFolderHint: "Leave empty to keep chats in their own sandbox. Chats that already exist switch to this folder too -- files they wrote earlier stay in their old sandbox and are no longer listed in those chats. A project can set its own folder, which overrides this one.",
         // Not rendered: extra terms the settings search matches this row on.
         workspaceFolderKeywords:
           "workspace folder directory path location chat sandbox root working directory files agent tools",

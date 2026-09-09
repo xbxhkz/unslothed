@@ -154,6 +154,13 @@ def _write_setting(mapping: dict) -> None:
     upsert_app_settings(mapping)
 
 
+# The last value a read actually produced. "Could not read the setting" is not
+# the same answer as "the user has not chosen a folder", and callers cannot tell
+# them apart from a None: a single SQLITE_BUSY would otherwise move a live chat
+# out of the user's folder and into an empty sandbox mid-conversation.
+_last_known_root: "str | None" = None
+
+
 def get_global_root() -> "str | None":
     """The global default workspace root, or None when unset or unusable.
 
@@ -163,13 +170,33 @@ def get_global_root() -> "str | None":
       * blank -- an empty string would resolve to the process cwd
       * missing on disk -- _get_workdir calls makedirs() on whatever it returns,
         so a stale value would silently recreate a folder the user deleted
+
+    A failure to READ the setting is none of those, and is answered with the
+    last value this process did read (None until it has read one). Only a
+    successful read updates that, so a folder the user genuinely cleared or
+    deleted still falls through on the very next call.
     """
-    raw = _read_setting(WORKSPACE_ROOT_KEY, None)
+    global _last_known_root
+    try:
+        raw = _read_setting(WORKSPACE_ROOT_KEY, None)
+    except Exception:  # noqa: BLE001 - a storage hiccup is not "unset"
+        return _last_known_root
     if not isinstance(raw, str) or not raw.strip():
+        _last_known_root = None
         return None
-    resolved = _real(raw.strip())
-    if not os.path.isdir(resolved):
+    try:
+        resolved = _real(raw.strip())
+        usable = os.path.isdir(resolved)
+    except (OSError, ValueError):
+        # A stored value that cannot even be resolved (an embedded NUL, say) is
+        # "unusable", which is one of the documented None cases -- not a read
+        # failure, so it clears the cached value rather than keeping it.
+        _last_known_root = None
         return None
+    if not usable:
+        _last_known_root = None
+        return None
+    _last_known_root = resolved
     return resolved
 
 

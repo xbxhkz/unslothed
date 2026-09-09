@@ -156,9 +156,9 @@ export function ProjectFolderDialog({
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
             Chats in "{projectName}" work in this folder instead of the global
-            workspace folder (or the sandbox, if neither is set). Existing chat
-            files are not moved -- they stay in the folder they were already
-            using.
+            workspace folder (or the sandbox, if neither is set). Chats that
+            already exist switch to it too -- files they wrote earlier stay
+            where they are and are no longer listed in those chats.
           </p>
           <div className="flex items-center gap-2">
             <Input

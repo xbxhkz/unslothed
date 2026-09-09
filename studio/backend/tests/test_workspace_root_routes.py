@@ -17,12 +17,16 @@ if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
 
-@pytest.fixture
-def client(monkeypatch):
+def _app(monkeypatch, *, via_api_key: bool):
     """Auth is replaced via dependency_overrides, NOT monkeypatch: Depends()
     captures the function object at import time, so reassigning the module
-    attribute would leave real auth in place and the tests would prove nothing."""
-    from auth.authentication import get_current_subject
+    attribute would leave real auth in place and the tests would prove nothing.
+
+    ``authenticated_via_api_key`` is overridden as well as the subject: the real
+    dependency reads an Authorization header these tests do not send, and
+    HTTPBearer's auto_error would answer 403 before any route ran.
+    """
+    from auth.authentication import authenticated_via_api_key, get_current_subject
     from routes.settings import router
     import utils.workspace_root as mod
 
@@ -33,7 +37,20 @@ def client(monkeypatch):
     app = FastAPI()
     app.include_router(router, prefix = "/api/settings")
     app.dependency_overrides[get_current_subject] = lambda: "test-subject"
+    app.dependency_overrides[authenticated_via_api_key] = lambda: via_api_key
     return TestClient(app)
+
+
+@pytest.fixture
+def client(monkeypatch):
+    """An interactive UI session, which is what the settings UI is."""
+    return _app(monkeypatch, via_api_key = False)
+
+
+@pytest.fixture
+def api_key_client(monkeypatch):
+    """A programmatic caller holding an sk-unsloth key, not a UI session."""
+    return _app(monkeypatch, via_api_key = True)
 
 
 class TestGlobalRootEndpoints:
@@ -72,6 +89,22 @@ class TestGlobalRootEndpoints:
         r = client.post("/api/settings/workspace-root/preview",
                         json = {"path": str(tmp_path / "nope")})
         assert r.json()["exists"] is False
+
+
+class TestOnlyTheUiMaySetIt:
+    """Warn-only governs WHICH paths may be chosen, not WHO may choose one.
+
+    This setting decides where `terminal` runs with full read and write, so it
+    is gated exactly like the llama.cpp executable path in the same file.
+    """
+
+    def test_an_api_key_may_not_set_the_workspace_root(self, api_key_client, tmp_path):
+        r = api_key_client.put("/api/settings/workspace-root", json = {"path": str(tmp_path)})
+        assert r.status_code == 403
+
+    def test_an_api_key_that_is_refused_stores_nothing(self, api_key_client, tmp_path):
+        api_key_client.put("/api/settings/workspace-root", json = {"path": str(tmp_path)})
+        assert api_key_client.get("/api/settings/workspace-root").json()["path"] is None
 
 
 class TestProjectPatchModel:
@@ -132,6 +165,87 @@ class TestProjectPatchRootPathWiring:
 
         stored = get_chat_project(project_id)
         assert Path(stored["rootPath"]) == chosen_root.resolve()
+
+    def test_an_unusable_root_is_refused_before_it_is_committed(self, tmp_path, monkeypatch):
+        """The bad value must never reach the row.
+
+        update_chat_project used to write and commit it, and only the ensure
+        call after that discovered the folder could not be made -- leaving the
+        project permanently pointed at a folder that works nowhere, and 500ing
+        every later read of the project list.
+        """
+        from fastapi import HTTPException
+
+        from routes.chat_history import ChatProjectPatch, patch_project
+        from storage import studio_db
+        from storage.studio_db import get_chat_project
+
+        project_id = self._make_project(tmp_path, monkeypatch)
+        before = get_chat_project(project_id)["rootPath"]
+
+        blocked = tmp_path / "no-entry"
+        real_ensure_dir = studio_db.ensure_dir
+
+        def refuse(path):
+            if "no-entry" in str(path):
+                raise PermissionError(13, "Permission denied", str(path))
+            return real_ensure_dir(path)
+
+        monkeypatch.setattr(studio_db, "ensure_dir", refuse)
+
+        with pytest.raises(HTTPException) as caught:
+            patch_project(
+                project_id,
+                ChatProjectPatch(rootPath = str(blocked)),
+                current_subject = "test-subject",
+            )
+
+        assert caught.value.status_code == 400
+        assert str(blocked) in str(caught.value.detail)
+        assert get_chat_project(project_id)["rootPath"] == before, (
+            "a refused folder must not have been committed"
+        )
+
+    def test_a_stored_unusable_root_does_not_break_the_project_list(self, tmp_path, monkeypatch):
+        """One bad row must not 500 GET /projects.
+
+        That list is the only surface from which the user can re-point the
+        project, so taking it out makes the bad value unrecoverable.
+        """
+        from routes import chat_history
+        from storage import studio_db
+
+        project_id = self._make_project(tmp_path, monkeypatch)
+        blocked = tmp_path / "no-entry"
+        conn = studio_db.get_connection()
+        try:
+            conn.execute(
+                "UPDATE chat_projects SET root_path = ? WHERE id = ?", (str(blocked), project_id)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        real_ensure_dir = studio_db.ensure_dir
+
+        def refuse(path):
+            if "no-entry" in str(path):
+                raise PermissionError(13, "Permission denied", str(path))
+            return real_ensure_dir(path)
+
+        monkeypatch.setattr(studio_db, "ensure_dir", refuse)
+
+        listed = chat_history.list_projects(current_subject = "test-subject")
+        assert [p.id for p in listed.projects] == [project_id]
+        assert chat_history.get_project(project_id, current_subject = "test-subject").id == project_id
+
+    def test_a_path_that_is_not_a_path_at_all_is_reported_as_a_bad_folder(self):
+        """Path() raises ValueError, not OSError, on an embedded NUL -- uncaught,
+        it escapes as a bare 500 from wherever the project was being read."""
+        from storage.studio_db import ProjectWorkspaceError, _ensure_project_workspace
+
+        with pytest.raises(ProjectWorkspaceError):
+            _ensure_project_workspace("C:\\bad\x00path")
 
     def test_omitting_rootpath_leaves_the_stored_root_untouched(self, tmp_path, monkeypatch):
         """Patching an unrelated field must not clobber rootPath. This is what

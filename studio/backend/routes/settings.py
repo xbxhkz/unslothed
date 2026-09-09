@@ -1026,14 +1026,22 @@ def get_workspace_root(current_subject: str = Depends(get_current_subject)) -> W
 
 @router.put("/workspace-root", response_model = WorkspaceRootResponse)
 def put_workspace_root(
-    payload: WorkspaceRootPayload, current_subject: str = Depends(get_current_subject)
+    payload: WorkspaceRootPayload,
+    current_subject: str = Depends(get_current_subject),
+    via_api_key: bool = Depends(authenticated_via_api_key),
 ) -> WorkspaceRootResponse:
     """Set the global workspace root.
 
     A flagged path is still stored: the policy is warn-only, so the warnings
     ride along in the response for the UI to show. Returning 4xx here would
     quietly turn this into a blocking feature.
+
+    Warn-only governs WHICH paths may be chosen, not WHO may choose one. This
+    setting decides where `terminal` runs with full read and write, so it is
+    gated like the llama.cpp executable path above: the interactive UI only,
+    never an API key.
     """
+    require_ui_session(via_api_key)
     path = set_global_root(payload.path)
     return WorkspaceRootResponse(path = path, warnings = _workspace_root_warnings(path))
 

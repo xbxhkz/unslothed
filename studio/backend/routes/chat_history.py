@@ -48,6 +48,7 @@ from storage.studio_db import (
     list_chat_messages,
     list_chat_messages_for_threads,
     list_chat_threads,
+    prepare_project_root,
     sync_chat_messages,
     update_chat_project,
     update_chat_thread,
@@ -952,13 +953,33 @@ def delete_attachment(
     return {"ok": True}
 
 
+def _ensured_project(project_id: str, fallback: Optional[dict] = None) -> Optional[dict]:
+    """The project with its workspace folder prepared, or the row as it stands.
+
+    A rootPath that cannot be created is reported as the project's own state
+    rather than raised. One unusable folder would otherwise 500 every read of
+    the project list -- and that list is the only place the user can go to
+    re-point it, so the failure would be unrecoverable from the UI.
+    """
+    try:
+        return ensure_chat_project_workspace(project_id) or fallback
+    except ProjectWorkspaceError as exc:
+        logger.warning(
+            "Could not prepare the workspace folder %s for project %s",
+            exc.path,
+            project_id,
+            exc_info = True,
+        )
+        return fallback if fallback is not None else get_chat_project(project_id)
+
+
 @router.get("/projects", response_model = ChatProjectListResponse)
 def list_projects(
     include_archived: bool = Query(False), current_subject: str = Depends(get_current_subject)
 ):
     return ChatProjectListResponse(
         projects = [
-            ChatProject(**(ensure_chat_project_workspace(project["id"]) or project))
+            ChatProject(**(_ensured_project(project["id"], project) or project))
             for project in list_chat_projects(include_archived = include_archived)
         ]
     )
@@ -986,13 +1007,32 @@ def save_project(payload: ChatProject, current_subject: str = Depends(get_curren
 
 @router.get("/projects/{project_id}", response_model = ChatProject)
 def get_project(project_id: str, current_subject: str = Depends(get_current_subject)):
-    project = ensure_chat_project_workspace(project_id)
+    project = _ensured_project(project_id)
     if project is None:
         raise HTTPException(
             status_code = 404,
             detail = f"Project {project_id} not found",
         )
     return ChatProject(**project)
+
+
+def _prepared_root(supplied: str) -> str:
+    """A rootPath the caller supplied, created and resolved, or a 400.
+
+    Warn-only governs WHICH folders may be chosen -- a flagged one is still
+    accepted. A folder that cannot be created at all is a different matter:
+    stored, it works nowhere and breaks the project list on the way past.
+    """
+    try:
+        return prepare_project_root(supplied)
+    except ProjectWorkspaceError as exc:
+        raise log_and_http_error(
+            exc,
+            400,
+            f"Could not use the folder {exc.path}. Check that it exists and is writable.",
+            event = "chat_history.patch_project_workspace_failed",
+            log = logger,
+        ) from exc
 
 
 @router.patch("/projects/{project_id}", response_model = ChatProject)
@@ -1005,9 +1045,16 @@ def patch_project(
     for field in ("name", "archived", "createdAt", "updatedAt"):
         if field in patch and patch[field] is None:
             raise HTTPException(status_code = 400, detail = f"{field} cannot be null")
+    if "rootPath" in patch:
+        supplied = (patch["rootPath"] or "").strip()
+        # Validated BEFORE the write, not after it: the update commits the raw
+        # value, and only the ensure call that follows finds out the folder
+        # cannot be made -- which left the bad value stored and 500ing every
+        # later read of the project list.
+        patch["rootPath"] = _prepared_root(supplied) if supplied else None
     project = update_chat_project(project_id, patch)
     if project is not None:
-        project = ensure_chat_project_workspace(project_id)
+        project = _ensured_project(project_id, project)
     if project is None:
         raise HTTPException(
             status_code = 404,

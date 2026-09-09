@@ -8496,6 +8496,14 @@ def resolve_sandbox_workdir(session_id: str | None = None) -> str:
         project = _project_workdir_for(session_id)
         if project:
             return project
+        # _get_workdir's order and its session_id gate, on the read side: every
+        # download, listing and "open chat folder" resolves here, so without
+        # this the tools write to the chosen folder while the UI lists an empty
+        # sandbox and every file card 404s. Creates nothing -- get_global_root()
+        # returns None unless the directory is already there.
+        global_workdir = _global_workspace_root()
+        if global_workdir:
+            return global_workdir
     root = sandbox_root()
     cached = _workdirs.get(session_id or _ANON_KEY)
     if (
