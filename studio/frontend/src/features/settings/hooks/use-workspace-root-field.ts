@@ -58,6 +58,8 @@ export function useWorkspaceRootField({
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
+  // Resolves to the loaded path (`""` when cleared, `null` when the load
+  // failed or was superseded) so `reload` below can chain a preview off it.
   // Exposed as `reload` too: a caller that keeps this hook mounted across
   // opens (a dialog toggled by `open`, rather than mounted fresh each time)
   // needs a way to re-fetch instead of showing whatever was left over --
@@ -66,15 +68,17 @@ export function useWorkspaceRootField({
     (signal: { cancelled: boolean }) => {
       setProblem("");
       setSaved(false);
-      void load().then((result) => {
-        if (signal.cancelled) return;
+      return load().then((result) => {
+        if (signal.cancelled) return null;
         setLoaded(true);
         if (!result) {
           setProblem(messages.loadFailed);
-          return;
+          return null;
         }
-        setPath(result.path ?? "");
+        const loadedPath = result.path ?? "";
+        setPath(loadedPath);
         setWarnings(result.warnings);
+        return loadedPath;
       });
     },
     [load, messages.loadFailed],
@@ -82,13 +86,11 @@ export function useWorkspaceRootField({
 
   useEffect(() => {
     const signal = { cancelled: false };
-    runLoad(signal);
+    void runLoad(signal);
     return () => {
       signal.cancelled = true;
     };
   }, [runLoad]);
-
-  const reload = useCallback(() => runLoad({ cancelled: false }), [runLoad]);
 
   const runPreview = useCallback(
     async (candidate: string) => {
@@ -109,9 +111,26 @@ export function useWorkspaceRootField({
     [preview, messages.previewFailed, messages.notExist],
   );
 
+  // Re-fetches, then re-classifies the loaded path through `preview` when it
+  // is non-empty. The plain load alone is not enough for a caller whose
+  // `load` cannot itself carry authoritative warnings (a project's PATCH
+  // route returns no `warnings` field, so its `load` hard-codes an empty
+  // array) -- without this, reopening a dialog on an already-flagged root
+  // would silently show no warning at all until the user re-typed the path.
+  const reload = useCallback(async () => {
+    const signal = { cancelled: false };
+    const loadedPath = await runLoad(signal);
+    if (signal.cancelled || !loadedPath) return;
+    await runPreview(loadedPath);
+  }, [runLoad, runPreview]);
+
   // `explicitPath` lets a caller (the folder browser) commit the path it just
   // picked directly, rather than relying on `path` state that a preceding
-  // setState in the same handler has not applied yet.
+  // setState in the same handler has not applied yet. Returns the saved
+  // `{path, warnings}` (not just a boolean) so a caller that closes its own
+  // UI on success -- and so can no longer rely on this hook's state being
+  // rendered anywhere -- still has the warnings in hand to show some other
+  // way (e.g. a toast).
   const commit = useCallback(
     async (explicitPath?: string | null) => {
       const target =
@@ -124,12 +143,12 @@ export function useWorkspaceRootField({
       setSaving(false);
       if (!result) {
         setProblem(messages.saveFailed);
-        return false;
+        return null;
       }
       setPath(result.path ?? "");
       setWarnings(result.warnings);
       setSaved(true);
-      return true;
+      return result;
     },
     [save, path, messages.saveFailed],
   );

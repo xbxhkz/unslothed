@@ -46,7 +46,19 @@ async function saveProjectRoot(
 ): Promise<WorkspaceRootState | null> {
   try {
     const record = await updateChatProjectRootPath(projectId, path);
-    return { path: record.rootPath ?? null, warnings: [] };
+    const savedPath = record.rootPath ?? null;
+    // The project PATCH route returns the plain project record, which
+    // carries no `warnings` field (routes/chat_history.py's ChatProject
+    // model has none) -- classify the path we just committed so a
+    // Browse-picked folder still surfaces a warning, exactly as a typed one
+    // does through `preview`. A failed classification here degrades to "no
+    // warnings" rather than failing the save: the folder is already
+    // committed, and warn-only means a missed warning is a lesser problem
+    // than reporting a successful save as a failure.
+    const warnings = savedPath
+      ? ((await previewWorkspaceRoot(savedPath))?.warnings ?? [])
+      : [];
+    return { path: savedPath, warnings };
   } catch {
     return null;
   }
@@ -58,8 +70,11 @@ async function saveProjectRoot(
  * preview-before-commit state machine and warn-only policy behind the
  * global setting (Task 6) -- pointed at this project's PATCH endpoint
  * instead. The project PATCH route returns the full project record, not
- * `{path, warnings}`, so `warnings` here always come from the shared
- * preview endpoint, never from the save response itself.
+ * `{path, warnings}`, so `saveProjectRoot` below folds in a classification
+ * from the shared preview endpoint itself: without that, a folder picked
+ * through Browse (which saves immediately, with no separate preview step)
+ * would silently carry no warning at all, since nothing else in this
+ * component's commit path would ever call `preview` for it.
  */
 export function ProjectFolderDialog({
   projectId,
@@ -107,16 +122,27 @@ export function ProjectFolderDialog({
 
   const commitAndClose = useCallback(
     async (explicitPath?: string | null) => {
-      const ok = await commit(explicitPath);
-      if (!ok) {
+      const result = await commit(explicitPath);
+      if (!result) {
         toast.error("Couldn't update the project folder");
         return;
       }
       // Only close on success, so a failed save leaves the dialog open to
       // retry rather than silently discarding the edit.
       setBrowserOpen(false);
-      toast.success("Project folder updated");
       onOpenChange(false);
+      // The dialog is closing (this stays true for both the typed-Save and
+      // Browse-select paths), so its own inline warnings list is about to
+      // disappear with it -- carry any warnings into the toast instead of
+      // dropping them, using `result` (not hook state) since state set
+      // inside `commit` is not guaranteed visible in this closure yet.
+      if (result.warnings.length > 0) {
+        toast.warning("Project folder updated", {
+          description: result.warnings.map((w) => w.message).join(" "),
+        });
+      } else {
+        toast.success("Project folder updated");
+      }
     },
     [commit, onOpenChange],
   );

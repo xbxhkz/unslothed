@@ -45,10 +45,13 @@ export function WorkspaceRootSetting() {
 
   const commit = useCallback(
     async (explicitPath?: string | null) => {
-      const ok = await save(explicitPath);
-      if (ok) {
+      const result = await save(explicitPath);
+      if (result) {
         // Only close the browser on success, matching the llama.cpp path
-        // row: a failed save leaves it open so the user can retry.
+        // row: a failed save leaves it open so the user can retry. Its
+        // warnings render inline below the row regardless (this row stays
+        // on the page after the browser closes), so no toast needs to
+        // carry them the way the project dialog's does.
         setBrowserOpen(false);
         toast.success(t("settings.resources.storage.workspaceSaved"));
       } else {
