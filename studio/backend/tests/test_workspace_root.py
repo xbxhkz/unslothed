@@ -241,6 +241,53 @@ class TestResolutionOrder:
         assert tools._contained_in_root(result, tools.sandbox_root())
 
 
+class TestSetGlobalRootInvalidatesTheCache:
+    """New-1: _get_workdir and resolve_sandbox_workdir consult ``_workdirs``
+    in opposite orders relative to the global root -- the former checks the
+    cache first, the latter checks the global root first. Setting the root
+    mid-session used to leave a session's cached sandbox in place, so tools
+    kept writing there while every read-only route already served the newly
+    chosen folder. The fix is set_global_root invalidating the cache on a
+    successful write.
+    """
+
+    def test_the_two_resolvers_agree_after_the_global_root_is_set_mid_session(
+        self, monkeypatch, tmp_path
+    ):
+        from core.inference import tools
+        import utils.workspace_root as mod
+
+        chosen = tmp_path / "chosen"; chosen.mkdir()
+        monkeypatch.setattr(tools, "_project_workdir_for", lambda sid: None)
+
+        # Step 1: no global root set yet. _get_workdir claims and caches the
+        # sandbox -- exactly a chat that ran a tool before Settings was
+        # touched.
+        monkeypatch.setattr(mod, "_read_setting", lambda key, fallback = None: None)
+        tools._workdirs.pop("sess-mid", None)
+        sandboxed = os.path.realpath(tools._get_workdir("sess-mid"))
+        assert tools._contained_in_root(sandboxed, tools.sandbox_root())
+
+        # Step 2: the user sets the global root through the real setter --
+        # not by patching _read_setting alone, since the invalidation lives
+        # in the setter itself.
+        monkeypatch.setattr(mod, "_write_setting", lambda mapping: None)
+        mod.set_global_root(str(chosen))
+        # Reads now answer with the new value -- standing in for the setting
+        # the mocked _write_setting above did not actually persist.
+        monkeypatch.setattr(mod, "_read_setting", lambda key, fallback = None: str(chosen))
+
+        # Step 3: both resolvers must agree, and both must point at the
+        # chosen folder rather than the stale cached sandbox.
+        served = os.path.realpath(tools.resolve_sandbox_workdir("sess-mid"))
+        written = os.path.realpath(tools._get_workdir("sess-mid"))
+        tools._workdirs.pop("sess-mid", None)
+
+        assert served == written
+        assert served == os.path.realpath(str(chosen))
+        assert served != sandboxed
+
+
 class TestProjectRoot:
     def test_a_supplied_root_is_honoured_at_creation(self, tmp_path, monkeypatch):
         from storage import studio_db
@@ -512,4 +559,23 @@ class TestAStorageHiccupDoesNotMoveALiveChat:
         monkeypatch.setattr(mod, "_read_setting", lambda key, fallback = None: str(chosen))
         assert get_global_root() == os.path.realpath(str(chosen))
         monkeypatch.setattr(mod, "_read_setting", lambda key, fallback = None: None)
+        assert get_global_root() is None
+
+    def test_a_read_failure_does_not_return_a_since_deleted_root(self, tmp_path, monkeypatch):
+        """New-2: the cached last-known root can itself have been deleted by
+        the user since it was last confirmed. A read failure must not hand it
+        back unchecked -- _get_workdir would makedirs() it right back into
+        existence, which is the one outcome this function's own docstring
+        says must not happen."""
+        import utils.workspace_root as mod
+        chosen = tmp_path / "chosen"; chosen.mkdir()
+        monkeypatch.setattr(mod, "_read_setting", lambda key, fallback = None: str(chosen))
+        assert get_global_root() == os.path.realpath(str(chosen))
+
+        chosen.rmdir()
+
+        def boom(key, fallback = None):
+            raise RuntimeError("database is locked")
+
+        monkeypatch.setattr(mod, "_read_setting", boom)
         assert get_global_root() is None

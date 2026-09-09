@@ -180,6 +180,12 @@ def get_global_root() -> "str | None":
     try:
         raw = _read_setting(WORKSPACE_ROOT_KEY, None)
     except Exception:  # noqa: BLE001 - a storage hiccup is not "unset"
+        # The cached path itself can have been deleted since it was last
+        # confirmed. Handing it back unchecked is the one outcome this
+        # function promises never to produce -- _get_workdir calls
+        # makedirs() on whatever it gets back.
+        if _last_known_root is not None and not os.path.isdir(_last_known_root):
+            return None
         return _last_known_root
     if not isinstance(raw, str) or not raw.strip():
         _last_known_root = None
@@ -200,12 +206,47 @@ def get_global_root() -> "str | None":
     return resolved
 
 
+def _invalidate_workdir_cache() -> None:
+    """Drop every cached sandbox resolution in core/inference/tools.py.
+
+    _get_workdir and resolve_sandbox_workdir consult that cache in opposite
+    orders relative to this module's root: the former checks it before the
+    global root, the latter after. Nothing else clears the cache when the
+    global root changes, so a session that ran a tool before the folder was
+    chosen would otherwise keep writing to its old sandbox while every
+    read-only route (download, listing, "open folder") already serves the
+    new one -- for the rest of the process's life.
+
+    Imported lazily to match _global_workspace_root's own lazy import of this
+    module: that import exists to avoid a circular import, and a module-level
+    import here would create the same cycle in the other direction. Wrapped
+    because the setting write above has already succeeded by the time this
+    runs -- losing the cache is only a missed optimisation (_get_workdir
+    re-resolves and re-creates idempotently, project entries included), and
+    must never turn a saved setting into a failed one.
+
+    Clears the whole cache rather than filtering to sandbox-contained
+    entries: a project workdir re-resolves to the identical path (it does not
+    depend on the global root), so dropping it costs one redundant lookup and
+    leaves nothing stale, while a narrower filter would have to reimplement
+    tools.py's own containment/ownership rules here and risk drifting from
+    them.
+    """
+    try:
+        from core.inference import tools
+        tools._workdirs.clear()
+    except Exception:  # noqa: BLE001 - the write already succeeded
+        pass
+
+
 def set_global_root(path: "str | None") -> "str | None":
     """Store the global default. ``None`` or blank clears it. Never refuses a
     path -- classification is advisory and belongs to the caller."""
     if path is None or not str(path).strip():
         _write_setting({WORKSPACE_ROOT_KEY: None})
+        _invalidate_workdir_cache()
         return None
     resolved = _real(str(path).strip())
     _write_setting({WORKSPACE_ROOT_KEY: resolved})
+    _invalidate_workdir_cache()
     return resolved
