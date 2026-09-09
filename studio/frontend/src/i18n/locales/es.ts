@@ -961,6 +961,20 @@ export const es = {
         cacheSaveError:
           "No se pudo actualizar la ubicación de descarga de los modelos",
         cachePickerError: "No se pudo abrir el selector de carpetas",
+        workspaceFolder: "Workspace folder",
+        workspaceFolderDescription: "Where chats outside a project work, instead of their own sandbox.",
+        workspaceFolderHint: "Leave empty to keep chats in their own sandbox. Setting this does not move files from chats that already exist -- only new work uses it. A project can set its own folder, which overrides this one.",
+        // Not rendered: extra terms the settings search matches this row on.
+        workspaceFolderKeywords:
+          "workspace folder directory path location chat sandbox root working directory files agent tools",
+        chooseWorkspaceTitle: "Choose workspace folder",
+        chooseWorkspaceAction: "Use this folder",
+        clearWorkspaceAction: "Clear (use the sandbox)",
+        workspaceSaved: "Workspace folder updated",
+        workspaceSaveError: "Couldn't update the workspace folder",
+        workspaceLoadError: "Couldn't load the current workspace folder",
+        workspacePreviewError: "Couldn't check that folder",
+        workspaceNotExist: "That folder does not exist yet",
       },
       environment: {
         title: "Entorno",
