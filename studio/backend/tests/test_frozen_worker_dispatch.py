@@ -214,6 +214,31 @@ def test_spec_collects_neighbouring_data_files():
 
 
 @pytest.mark.skipif(not _SPEC.is_file(), reason = "packaging spec not present")
+def test_spec_bundles_triton_completely():
+    """torch.compile -> inductor -> triton needs all three of these.
+
+    Video generation died with "0 active drivers ([])" because triton discovers
+    backends through entry_points() (dist-info, named triton-windows), a backend
+    needs compiler.py + driver.c + bin/ptxas.exe alongside driver.py, and
+    nvidia/compiler.py lazily imports triton.language.extra.cuda. Each omission
+    alone still fails, so all three assertions matter.
+    """
+    spec = _SPEC.read_text(encoding = "utf-8")
+    assert 'collect_submodules("triton")' in spec, (
+        "triton submodules dropped; codegen fails on the lazily imported "
+        "triton.language.extra.cuda"
+    )
+    assert 'collect_data_files("triton")' in spec, (
+        "triton data files dropped; driver.c and bin/ptxas.exe are read at "
+        "runtime when triton compiles its driver shim"
+    )
+    assert 'copy_metadata("triton-windows")' in spec, (
+        "triton entry-point metadata dropped; backend discovery returns zero "
+        'backends and generation dies with "0 active drivers"'
+    )
+
+
+@pytest.mark.skipif(not _SPEC.is_file(), reason = "packaging spec not present")
 def test_spec_bundles_the_spawned_worker():
     """The other half: dispatch is useless if the module is not in the bundle.
 

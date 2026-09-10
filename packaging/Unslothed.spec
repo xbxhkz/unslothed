@@ -419,6 +419,40 @@ for _dist in _METADATA_CHECKED_AT_IMPORT:
 datas += collect_data_files("kernels")
 datas += collect_data_files("whisper")
 
+# Triton, complete. Video generation died mid-run with
+#   RuntimeError: 0 active drivers ([]). There should only be one.
+# from triton/runtime/driver.py, reached because diffusers' GGUF dequant path
+# (quantizers/gguf/utils.py forward_native) goes through torch.compile ->
+# inductor -> triton codegen.
+#
+# Three separate omissions, each of which alone still fails -- established by
+# hot-patching a built _internal/ and re-probing after each one:
+#
+#  1. ENTRY POINTS. triton/backends/__init__.py discovers backends via
+#     entry_points().select(group="triton.backends"), which lives in the
+#     dist-info. No metadata -> zero backends -> "0 active drivers". The dist is
+#     named triton-windows, not triton. (There is a TRITON_BACKENDS_IN_TREE=1
+#     filesystem-scan fallback; not used, because depending on a fast-path env
+#     var is more fragile than shipping the metadata its default path wants.)
+#  2. BACKEND FILES. Analysis pulled in only __init__.py and driver.py. A
+#     backend needs compiler.py too, plus driver.c (triton compiles a driver
+#     shim from that source at RUNTIME) and bin/ptxas.exe, include/, lib/.
+#  3. LAZY SUBMODULES. With the above fixed, codegen still failed on
+#     `import triton.language.extra.cuda` inside nvidia/compiler.py -- imported
+#     lazily, so the static walk never saw it.
+#
+# Verified end to end inside the built exe, not merely as bundled files: a real
+# torch.compile(backend="inductor") round-trip codegens, launches on the GPU and
+# matches eager exactly (|delta| = 0.0) on an RTX 4050 (sm_89). ~129 MB.
+#
+# NOTE the app's own guard (core/export/worker.py:576) is `import triton`
+# succeeding. Frozen, that passed while triton was unusable -- the same
+# false-positive shape as is_torchcodec_available(). It is honest again only
+# because triton genuinely works now; it would not have caught this.
+hiddenimports += collect_submodules("triton")
+datas += collect_data_files("triton")
+datas += copy_metadata("triton-windows")
+
 # diceware generates the bootstrap admin password on a FIRST RUN with no
 # password set (auth/storage.py's generate_bootstrap_password). Found by
 # launching the built exe against an EMPTY UNSLOTH_STUDIO_HOME, which is the
