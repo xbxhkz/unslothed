@@ -176,6 +176,25 @@ def test_spec_copies_metadata_checked_at_import():
 
 
 @pytest.mark.skipif(not _SPEC.is_file(), reason = "packaging spec not present")
+def test_spec_collects_neighbouring_data_files():
+    """Packages that open a data file beside their own source at import time.
+
+    PyInstaller follows imports, so the module lands in the PYZ while the data
+    file beside it is left behind: the import succeeds and the open then raises.
+    kernels/deps.py reads python_depends.json this way, which surfaced as
+    "Cannot load dependency data, is `kernels` correctly installed?" while
+    loading a Wan pipeline -- naming the wrong culprit, since kernels was
+    installed and merely unshipped.
+    """
+    spec = _SPEC.read_text(encoding = "utf-8")
+    for pkg in ("kernels", "whisper"):
+        assert f'collect_data_files("{pkg}")' in spec, (
+            f"spec no longer collects {pkg}'s data files; it opens one relative "
+            "to __file__ at import, so the frozen build raises on use"
+        )
+
+
+@pytest.mark.skipif(not _SPEC.is_file(), reason = "packaging spec not present")
 def test_spec_bundles_the_spawned_worker():
     """The other half: dispatch is useless if the module is not in the bundle.
 

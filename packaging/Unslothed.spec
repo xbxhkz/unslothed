@@ -338,6 +338,31 @@ for _dist in _METADATA_CHECKED_AT_IMPORT:
             "it into the build venv rather than removing it from this list."
         ) from exc
 
+# Packages that open a data file NEXT TO their own source at import time.
+# PyInstaller follows imports, so the module lands in the PYZ while the data file
+# beside it is simply left behind -- the module imports fine and then raises on
+# the open, which reads as a broken feature rather than a packaging fault.
+#
+# kernels: deps.py does
+#     with open(Path(__file__).parent / "python_depends.json") as f
+# at import. Loading a Wan/diffusion pipeline died with
+#     Failed to import diffusers.pipelines.wan.pipeline_wan ...
+#     Cannot load dependency data, is `kernels` correctly installed?
+# which names the wrong culprit: kernels IS installed, its json was not shipped.
+#
+# whisper: normalizers/english.py opens english.json, and assets/ holds
+# mel_filters.npz plus the two .tiktoken vocabularies -- whisper cannot compute
+# a mel spectrogram or tokenize without them. Imported by
+# core/training/trainer.py:2286, so this was a latent second instance of the
+# same bug; found by sweeping site-packages for the pattern rather than by
+# waiting for it to crash. ~1.7 MB.
+#
+# These land inside _internal/, which is where Path(__file__).parent resolves
+# for a PYZ module -- unlike the frontend, which run.py resolves ABOVE _internal/
+# and which therefore needs the post-build copy in build-installer.ps1 instead.
+datas += collect_data_files("kernels")
+datas += collect_data_files("whisper")
+
 # diceware generates the bootstrap admin password on a FIRST RUN with no
 # password set (auth/storage.py's generate_bootstrap_password). Found by
 # launching the built exe against an EMPTY UNSLOTH_STUDIO_HOME, which is the
