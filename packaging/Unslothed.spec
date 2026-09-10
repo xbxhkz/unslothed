@@ -12,7 +12,7 @@ import importlib.util
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 # SPECPATH is the directory holding this file: <repo>/packaging. One .parent
 # reaches the repo root. A second .parent (as an earlier draft of this file
@@ -293,6 +293,50 @@ hiddenimports += collect_submodules("core.inference.assist_code")
 # collect_submodules rather than the one module, so a worker added upstream
 # beside hf_download.py is bundled without anyone remembering this file.
 hiddenimports += collect_submodules("hub.workers")
+
+# Distribution METADATA for the packages diffusers and transformers version-check
+# at import time. PyInstaller bundles modules by following imports, but a
+# package's .dist-info is a separate artifact it copies only when some hook asks
+# -- so `import requests` worked while importlib.metadata.version("requests")
+# raised, and selecting a diffusion model died with
+#   The 'requests' distribution was not found and is required by this application
+# (diffusers/dependency_versions_check.py, whose hint text still says
+# "pip install transformers -U" because diffusers copied the checker verbatim).
+#
+# Both libraries run these checks at IMPORT time, so a gap is not reachable
+# until the moment a model is selected -- long after any startup smoke test.
+#   diffusers:    python requests filelock numpy
+#   transformers: tqdm regex packaging filelock numpy tokenizers
+#                 huggingface-hub safetensors accelerate pyyaml
+#
+# Only `requests` was actually missing when this was found; the rest were
+# present only INCIDENTALLY, copied by some other package's hook. Listing them
+# all makes that a guarantee instead of a coincidence that a dependency bump
+# could quietly withdraw. copy_metadata raises on an absent package, so a build
+# fails loudly here rather than shipping an exe that dies on model select.
+_METADATA_CHECKED_AT_IMPORT = [
+    "requests",
+    "filelock",
+    "numpy",
+    "tqdm",
+    "regex",
+    "packaging",
+    "tokenizers",
+    "huggingface-hub",
+    "safetensors",
+    "accelerate",
+    "pyyaml",
+]
+for _dist in _METADATA_CHECKED_AT_IMPORT:
+    try:
+        datas += copy_metadata(_dist)
+    except Exception as exc:  # noqa: BLE001 -- surface the dist name, then stop
+        raise SystemExit(
+            f"[Unslothed.spec] copy_metadata({_dist!r}) failed: {exc}. "
+            "diffusers/transformers version-check this at import, so a frozen "
+            "build without its .dist-info dies when a model is selected. Install "
+            "it into the build venv rather than removing it from this list."
+        ) from exc
 
 # diceware generates the bootstrap admin password on a FIRST RUN with no
 # password set (auth/storage.py's generate_bootstrap_password). Found by
