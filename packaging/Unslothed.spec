@@ -374,6 +374,33 @@ else:
 # _installer_module() runs its own (here, harmless-but-wrong) insert.
 datas.append((str(ROOT / "studio" / "install_sd_cpp_prebuilt.py"), "studio"))
 
+# The sibling scripts named above are DELIBERATELY NOT bundled, and this note
+# exists so nobody "fixes" that by adding datas entries for them. It would
+# achieve nothing.
+#
+# utils/prebuilt/update_flow.py:135 runs them as
+#     cmd = [sys.executable, str(script), "--resolve-prebuilt", "latest", ...]
+# In a frozen build sys.executable is Unslothed.exe, not a Python interpreter,
+# and there is no python.exe in a PyInstaller onedir layout to substitute. So
+# the invocation cannot work however the script is packaged.
+#
+# Measured, not assumed -- running the built exe the way sys.executable would:
+#     Unslothed.exe some_installer.py --resolve-prebuilt latest --output-format json
+#     -> exit code 2
+#     Unslothed.exe: error: unrecognized arguments: some_installer.py ...
+# run.py's argparse rejects the extra arguments, so the subprocess exits
+# non-zero, resolve_prebuilt_for_host's except-clause fires and returns None --
+# the same result as the script not being found at all. Bundling would move the
+# failure from "no script" to "argparse error" and change nothing a user sees.
+#
+# What this costs: in the installed build, the in-app "check for a newer
+# llama.cpp / whisper.cpp prebuilt" flow always reports nothing available. It
+# fails OPEN by design (utils/prebuilt/update_flow.py:145 -- "any error -> None
+# so a source build never blocks the app"), so nothing crashes and the bundled
+# binaries keep working; only self-update is inert. Closing it properly needs an
+# interpreter the frozen app can invoke, or an in-process import path replacing
+# the subprocess -- both changes to upstream files this fork does not edit.
+
 a = Analysis(
     [str(ENTRY)],
     pathex = [str(ROOT), str(BACKEND)],
