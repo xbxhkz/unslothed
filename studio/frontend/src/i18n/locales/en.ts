@@ -2073,4 +2073,16 @@ export const en = {
       modelWeights: "Model weights",
     },
   },
+  chat: {
+    draftModelPicker: {
+      // Shown only when a drafter is pinned AND the model's saved speculative
+      // type is a non-auto value: that combination is exactly the one
+      // upstream's inherited-extras stripper (llama_server_args.py's
+      // _SPEC_FLAGS / strip_spec) drops on paths that omit llama_extra_args.
+      // Information, not alarm: Run Settings still works, so this names the
+      // one reliable path rather than describing a fault.
+      autoLoadFallbackNote:
+        "Applies to loads from Run Settings. Automatic loads — API auto-switch, idle reload, or applying chat settings — fall back to auto-detected drafter selection instead.",
+    },
+  },
 } as const;

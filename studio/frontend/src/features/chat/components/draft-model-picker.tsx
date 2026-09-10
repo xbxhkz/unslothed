@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useT } from "@/i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type DraftCandidate,
@@ -185,6 +186,13 @@ export function DraftModelPicker({
   const [hfRepo, setHfRepo] = useState("");
   const [problem, setProblem] = useState("");
   const [note, setNote] = useState("");
+  // Distinct from selectedRef/hfRepo: hfRepo also holds whatever the user is
+  // mid-typing into the HF repo box, which is not yet a pin. This tracks only
+  // a backend-confirmed pin (a successful apply, or a read-back that found
+  // one), so it can gate the auto-load note below without a typing keystroke
+  // flipping it on before anything is actually applied.
+  const [hasPin, setHasPin] = useState(false);
+  const t = useT();
 
   const hidden = NO_DRAFTER_MODES.has(speculativeType);
   const disabled = hydrating;
@@ -252,6 +260,7 @@ export function DraftModelPicker({
             ? "Automatic: the backend picks a colocated sidecar."
             : describeVerdict(r),
         );
+        setHasPin(choice !== null);
         selfWrittenKey.current = JSON.stringify(r.llamaExtraArgs);
         onArgsChange(r.llamaExtraArgs);
       } catch {
@@ -297,6 +306,7 @@ export function DraftModelPicker({
         }
         setSelectedRef(state.pin?.kind === "local" ? state.pin.ref : "");
         setHfRepo(state.pin?.kind === "hf" ? state.pin.ref : "");
+        setHasPin(state.pin !== null);
         setProblem(state.problem);
         setNote(state.note);
       })
@@ -324,6 +334,18 @@ export function DraftModelPicker({
   // could not list. Radix renders an empty trigger for a value with no matching
   // item, which would look exactly like "Automatic".
   const pinnedIsListed = candidates.some((c) => c.ref === selectedRef);
+
+  // Real gap, not a fault: llama_server_args.py's inherited-extras stripper
+  // treats every drafter-selector flag as shadowing speculative_type (the
+  // MTP-path comment at _SPEC_FLAGS explains why -- an inherited copy must
+  // not last-wins-override Unsloth's own auto-detected drafter). That strip
+  // only runs on a load that omits llama_extra_args and inherits it, and only
+  // when speculative_type is explicitly set to a non-auto value -- exactly an
+  // auto-switch load, an idle reload, or a chat-settings Apply for a model
+  // with both a pin and a forced strategy. A Run Settings load always sends
+  // llama_extra_args explicitly, so it is never stripped there.
+  const showsAutoLoadFallbackNote =
+    hasPin && speculativeType !== "" && speculativeType !== "auto";
 
   return (
     <div className="space-y-2">
@@ -420,6 +442,11 @@ export function DraftModelPicker({
       )}
       {!problem && note && (
         <p className="text-ui-11 text-muted-foreground">{note}</p>
+      )}
+      {!problem && showsAutoLoadFallbackNote && (
+        <p className="text-ui-11 text-muted-foreground">
+          {t("chat.draftModelPicker.autoLoadFallbackNote")}
+        </p>
       )}
     </div>
   );

@@ -2152,4 +2152,10 @@ export const it = {
       modelWeights: "Pesi del modello",
     },
   },
+  chat: {
+    draftModelPicker: {
+      autoLoadFallbackNote:
+        "Applies to loads from Run Settings. Automatic loads — API auto-switch, idle reload, or applying chat settings — fall back to auto-detected drafter selection instead.",
+    },
+  },
 } as const;

@@ -2087,4 +2087,10 @@ export const ko = {
       modelWeights: "모델 가중치",
     },
   },
+  chat: {
+    draftModelPicker: {
+      autoLoadFallbackNote:
+        "Applies to loads from Run Settings. Automatic loads — API auto-switch, idle reload, or applying chat settings — fall back to auto-detected drafter selection instead.",
+    },
+  },
 } satisfies DeepPartialMessageTree<typeof en>;

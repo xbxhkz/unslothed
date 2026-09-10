@@ -187,6 +187,7 @@ type World = {
   select?: Record<string, unknown>;
   args?: string[];
   hydrating?: boolean;
+  speculativeType?: string;
 };
 
 function setup(world: World) {
@@ -239,6 +240,10 @@ function setup(world: World) {
     "@/components/ui/info-hint": { InfoHint: "InfoHint" },
     "@/components/ui/input": { Input: "Input" },
     "@/components/ui/select": UI_SELECT,
+    // Echoes the key back rather than a translated string: these tests assert
+    // on the note's presence/absence, not its copy, so the key alone binds
+    // the assertion to the same string the component actually looked up.
+    "@/i18n": { useT: () => (key: string) => key },
     "../api/draft-model-api": api,
   });
 
@@ -250,7 +255,7 @@ function setup(world: World) {
       DraftModelPicker({
         modelId: "/m/target.gguf",
         ggufVariant: null,
-        speculativeType: "auto",
+        speculativeType: world.speculativeType ?? "auto",
         existingArgs: args,
         hydrating: world.hydrating ?? false,
         onArgsChange: (next: string[]) => {
@@ -621,5 +626,72 @@ test("the picker does not re-read the pin for its own write", async () => {
     app.pinRequests.length,
     before,
     "our own write must not trigger a re-read and a second verdict",
+  );
+});
+
+const AUTO_LOAD_NOTE_KEY = "chat.draftModelPicker.autoLoadFallbackNote";
+
+test("the auto-load fallback note appears when a pin and a forced speculative type coexist", async () => {
+  // I3 (routes/draft_model.py's module docstring): a pin survives a Run
+  // Settings load, which always sends llama_extra_args explicitly, but is
+  // silently stripped by the inherited-extras path (an auto-switch load, an
+  // idle reload, or a chat-settings Apply) whenever that load also carries an
+  // explicit, non-auto speculative_type. Both conditions have to hold for the
+  // note to be worth showing.
+  const app = setup({
+    args: ["--model-draft", "/m/d.gguf"],
+    pin: { pin: { kind: "local", ref: "/m/d.gguf" }, ok: true },
+    speculativeType: "mtp",
+  });
+  app.render();
+  await settle();
+  await settle();
+  const tree = app.render();
+
+  assert.match(
+    textOf(tree),
+    new RegExp(AUTO_LOAD_NOTE_KEY.replace(/[.]/g, "\\.")),
+    "a pin plus a forced (non-auto) speculative type must surface the note",
+  );
+});
+
+test("the auto-load fallback note does not appear without a pin", async () => {
+  const app = setup({
+    args: [],
+    pin: { pin: null, ok: true },
+    speculativeType: "mtp",
+  });
+  app.render();
+  await settle();
+  await settle();
+  const tree = app.render();
+
+  assert.doesNotMatch(
+    textOf(tree),
+    new RegExp(AUTO_LOAD_NOTE_KEY.replace(/[.]/g, "\\.")),
+    "no pin means nothing for an inherited load to strip -- the note has nothing to warn about",
+  );
+});
+
+test("the auto-load fallback note does not appear when the speculative type is auto", async () => {
+  // strip_spec (openai_auto_switch_settings.py / routes/inference.py) only
+  // turns on when the saved config sets speculative_type explicitly.
+  // "auto"/unset is stored as null and never reaches fields_set, so an
+  // inherited load keeps the pin -- there is nothing this model needs the
+  // workaround for.
+  const app = setup({
+    args: ["--model-draft", "/m/d.gguf"],
+    pin: { pin: { kind: "local", ref: "/m/d.gguf" }, ok: true },
+    speculativeType: "auto",
+  });
+  app.render();
+  await settle();
+  await settle();
+  const tree = app.render();
+
+  assert.doesNotMatch(
+    textOf(tree),
+    new RegExp(AUTO_LOAD_NOTE_KEY.replace(/[.]/g, "\\.")),
+    "auto never sets an explicit speculative_type to inherit, so the pin is never stripped",
   );
 });
