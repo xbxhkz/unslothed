@@ -2166,7 +2166,7 @@ export const fr = {
   chat: {
     draftModelPicker: {
       autoLoadFallbackNote:
-        "Applies to loads from Run Settings. Automatic loads — API auto-switch, idle reload, or applying chat settings — fall back to auto-detected drafter selection instead.",
+        "S'applique aux chargements depuis les paramètres d'exécution. Les chargements automatiques — changement automatique via l'API, rechargement après inactivité ou application des paramètres de discussion — reviennent à la sélection automatique du modèle brouillon.",
     },
   },
 } satisfies DeepPartialMessageTree<typeof en>;

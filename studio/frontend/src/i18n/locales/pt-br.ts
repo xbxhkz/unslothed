@@ -2117,7 +2117,7 @@ export const ptBR = {
   chat: {
     draftModelPicker: {
       autoLoadFallbackNote:
-        "Applies to loads from Run Settings. Automatic loads — API auto-switch, idle reload, or applying chat settings — fall back to auto-detected drafter selection instead.",
+        "Aplica-se aos carregamentos feitos pelas configurações de execução. Carregamentos automáticos — troca automática via API, recarregamento após inatividade ou aplicação das configurações do chat — recorrem à seleção automática do modelo de rascunho.",
     },
   },
 } satisfies DeepPartialMessageTree<typeof en>;

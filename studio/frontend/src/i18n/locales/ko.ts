@@ -2090,7 +2090,7 @@ export const ko = {
   chat: {
     draftModelPicker: {
       autoLoadFallbackNote:
-        "Applies to loads from Run Settings. Automatic loads — API auto-switch, idle reload, or applying chat settings — fall back to auto-detected drafter selection instead.",
+        "실행 설정에서 불러올 때 적용됩니다. 자동 불러오기(API 자동 전환, 유휴 상태 후 다시 불러오기, 채팅 설정 적용)에서는 대신 자동으로 감지된 드래프트 모델이 선택됩니다.",
     },
   },
 } satisfies DeepPartialMessageTree<typeof en>;

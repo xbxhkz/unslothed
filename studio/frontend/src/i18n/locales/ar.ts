@@ -2091,7 +2091,7 @@ export const ar = {
   chat: {
     draftModelPicker: {
       autoLoadFallbackNote:
-        "Applies to loads from Run Settings. Automatic loads — API auto-switch, idle reload, or applying chat settings — fall back to auto-detected drafter selection instead.",
+        "ينطبق على عمليات التحميل من إعدادات التشغيل. أمّا عمليات التحميل التلقائية — التبديل التلقائي عبر API، أو إعادة التحميل بعد الخمول، أو تطبيق إعدادات الدردشة — فتعود إلى الاختيار التلقائي لنموذج المسودة بدلاً من ذلك.",
     },
   },
 } satisfies DeepPartialMessageTree<typeof en>;

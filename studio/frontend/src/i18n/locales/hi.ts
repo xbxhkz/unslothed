@@ -2098,7 +2098,7 @@ export const hi = {
   chat: {
     draftModelPicker: {
       autoLoadFallbackNote:
-        "Applies to loads from Run Settings. Automatic loads — API auto-switch, idle reload, or applying chat settings — fall back to auto-detected drafter selection instead.",
+        "यह रन सेटिंग्स से होने वाले लोड पर लागू होता है। स्वचालित लोड — API ऑटो-स्विच, निष्क्रियता के बाद रीलोड, या चैट सेटिंग्स लागू करना — इसके बजाय स्वतः पहचाने गए ड्राफ़्ट मॉडल चयन पर वापस चले जाते हैं।",
     },
   },
 } satisfies DeepPartialMessageTree<typeof en>;

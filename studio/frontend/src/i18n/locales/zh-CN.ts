@@ -2016,7 +2016,7 @@ export const zhCN = {
   chat: {
     draftModelPicker: {
       autoLoadFallbackNote:
-        "Applies to loads from Run Settings. Automatic loads — API auto-switch, idle reload, or applying chat settings — fall back to auto-detected drafter selection instead.",
+        "适用于从运行设置发起的加载。自动加载（API 自动切换、空闲重新加载或应用聊天设置）将改为使用自动检测的草稿模型。",
     },
   },
 } satisfies DeepPartialMessageTree<typeof en>;
