@@ -280,6 +280,20 @@ hiddenimports = [
 hiddenimports += collect_submodules("core.inference.assist_vision")
 hiddenimports += collect_submodules("core.inference.assist_code")
 
+# hub.workers.* is spawned, never imported: hub/services/download_lifecycle.py
+# runs it as [sys.executable, "-m", "hub.workers.hf_download", ...] and NOTHING
+# in the tree imports it, so Analysis's import walk cannot see it and the whole
+# subpackage was absent from the bundle -- verified against Analysis-00.toc,
+# which listed 20+ other hub.* modules and no hub.workers at all.
+#
+# That made model downloads fail twice over: run.py's frozen `-m` shim answers
+# the spawn, and this answers what the shim then has to import. Without both,
+# a download dies with either an argparse usage dump or ModuleNotFoundError.
+#
+# collect_submodules rather than the one module, so a worker added upstream
+# beside hf_download.py is bundled without anyone remembering this file.
+hiddenimports += collect_submodules("hub.workers")
+
 # diceware generates the bootstrap admin password on a FIRST RUN with no
 # password set (auth/storage.py's generate_bootstrap_password). Found by
 # launching the built exe against an EMPTY UNSLOTH_STUDIO_HOME, which is the

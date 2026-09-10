@@ -125,6 +125,36 @@ backend_dir = Path(__file__).parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
+# Stand in for `python -m` when this file is a frozen executable.
+#
+# Studio spawns its helpers as [sys.executable, "-m", "<module>", ...] --
+# hub/services/download_lifecycle.py (hub.workers.hf_download),
+# core/inference/stt_download_worker.py, core/inference/llama_cpp.py. Under
+# PyInstaller sys.executable is Unslothed.exe, NOT an interpreter, so those
+# arguments reach this file's own argparse and the child dies with
+#   Unslothed.exe: error: unrecognized arguments: -m hub.workers.hf_download ...
+# The parent only sees a worker that exited 2, so a model download fails
+# instantly with a usage dump in place of an error.
+#
+# Deliberately NOT restricted to a module allowlist. The callers are upstream
+# code; a list here would silently break the next worker upstream adds, which
+# is the exact failure this shim exists to prevent. It is reachable only by
+# someone who can already run this binary, so it grants no new access.
+#
+# Position is load-bearing on both sides: after the sys.path.insert above (or
+# "hub.workers.hf_download" does not resolve) and before the imports below (a
+# short-lived worker must not pay for configure_cpu_threads, the torchao stub
+# or structlog, nor inherit their process-global side effects).
+if __name__ == "__main__" and getattr(sys, "frozen", False) and len(sys.argv) > 2 and sys.argv[1] == "-m":
+    import runpy
+
+    _worker_module = sys.argv[2]
+    # Emulate the interpreter: argv[0] becomes the module, the rest passes through.
+    sys.argv = [_worker_module, *sys.argv[3:]]
+    runpy.run_module(_worker_module, run_name = "__main__", alter_sys = True)
+    # Only reached when the worker returns instead of calling sys.exit().
+    raise SystemExit(0)
+
 # First, so these vars land before anything below can size an OpenMP/BLAS pool. Imports stdlib only.
 from utils.cpu_threads import configure_cpu_threads
 
