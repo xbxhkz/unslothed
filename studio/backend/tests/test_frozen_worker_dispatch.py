@@ -179,6 +179,13 @@ def test_spec_copies_metadata_checked_at_import():
     # and then reads metadata, and the lazy-module __getattr__ re-raises the
     # failure as "Could not import module 'UMT5EncoderModel'" -- a message that
     # names neither torchcodec nor metadata.
+    # torchvision/__init__.py:3 imports this stdlib module, but torch/torchvision
+    # are excluded from Analysis and copied via datas, so their imports were never
+    # walked. Its absence surfaced as "Could not import module 'UMT5EncoderModel'".
+    assert '"modulefinder"' in spec, (
+        "modulefinder dropped from hiddenimports; torchvision imports it at "
+        "top level and Analysis never walks torchvision (it is excluded)"
+    )
     for dist in ("torchcodec", "gguf"):
         assert dist in spec, (
             f"{dist} dropped from the metadata list; it is read via "

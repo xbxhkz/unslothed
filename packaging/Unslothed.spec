@@ -294,6 +294,25 @@ hiddenimports += collect_submodules("core.inference.assist_code")
 # beside hf_download.py is bundled without anyone remembering this file.
 hiddenimports += collect_submodules("hub.workers")
 
+# torch and torchvision are EXCLUDED from Analysis below (see the excludes= arg)
+# and copied in wholesale via datas instead. datas copies FILES; only Analysis
+# builds the import GRAPH -- so their own submodules are present (copied) while
+# anything EXTERNAL they import was never walked and is simply absent.
+#
+# torchvision/__init__.py line 3 does `from modulefinder import Module`. That is
+# pure-Python stdlib, so it lives in the PYZ or nowhere, and nowhere is what it
+# was. Loading a Wan pipeline died three levels deep:
+#   transformers/image_utils.py -> torchvision -> ModuleNotFoundError: modulefinder
+# resurfacing at the top as "Could not import module 'UMT5EncoderModel'", which
+# names nothing involved. warn-Unslothed.txt was silent because Analysis never
+# looked at torchvision at all.
+#
+# Swept torch + torchvision (2009 files) for external imports absent from the
+# TOC: 23 candidates, of which 19 are interpreter builtins (always present), two
+# are optional and uninstalled (annotationlib, defusedxml), win32api is bundled
+# already and guarded by try/except anyway -- leaving exactly this one.
+hiddenimports += ["modulefinder"]
+
 # Distribution METADATA for the packages diffusers and transformers version-check
 # at import time. PyInstaller bundles modules by following imports, but a
 # package's .dist-info is a separate artifact it copies only when some hook asks
