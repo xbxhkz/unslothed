@@ -173,6 +173,18 @@ def test_spec_copies_metadata_checked_at_import():
             f"{dist} dropped from the metadata list; diffusers/transformers "
             "version-check it at import, so a frozen build would fail on model select"
         )
+    # Both of these were actually missing and each cost a rebuild to find. The
+    # torchcodec one is the nastiest of the class: transformers guards it with
+    # is_torchcodec_available() (find_spec -> True, since the module IS bundled)
+    # and then reads metadata, and the lazy-module __getattr__ re-raises the
+    # failure as "Could not import module 'UMT5EncoderModel'" -- a message that
+    # names neither torchcodec nor metadata.
+    for dist in ("torchcodec", "gguf"):
+        assert dist in spec, (
+            f"{dist} dropped from the metadata list; it is read via "
+            "importlib.metadata at import time and its absence surfaces as an "
+            "unrelated-looking model-import error"
+        )
 
 
 @pytest.mark.skipif(not _SPEC.is_file(), reason = "packaging spec not present")

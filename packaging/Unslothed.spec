@@ -309,12 +309,32 @@ hiddenimports += collect_submodules("hub.workers")
 #   transformers: tqdm regex packaging filelock numpy tokenizers
 #                 huggingface-hub safetensors accelerate pyyaml
 #
-# Only `requests` was actually missing when this was found; the rest were
-# present only INCIDENTALLY, copied by some other package's hook. Listing them
-# all makes that a guarantee instead of a coincidence that a dependency bump
-# could quietly withdraw. copy_metadata raises on an absent package, so a build
-# fails loudly here rather than shipping an exe that dies on model select.
+# Beyond those declared lists, any unguarded importlib.metadata read that runs at
+# import time is the same bug. transformers/audio_utils.py:55 is the worked
+# example, and it shows why the two notions of "installed" diverge when frozen:
+#
+#     if is_torchcodec_available():      # find_spec() -> the MODULE is bundled: True
+#         version.parse(importlib.metadata.version("torchcodec"))   # METADATA: raises
+#
+# It surfaced as "Could not import module 'UMT5EncoderModel'" while loading a Wan
+# pipeline, because transformers' lazy-module __getattr__ swallows the real
+# exception and re-raises a generic one -- the message names neither torchcodec
+# nor metadata.
+#
+# The list below is therefore NOT hand-picked. It is every distribution that a
+# package in the model-loading chain (transformers, diffusers, accelerate, peft,
+# datasets, timm, unsloth_zoo, ...) passes to importlib.metadata.version /
+# .distribution / .metadata or pkg_resources.get_distribution, AND which is
+# actually installed -- swept mechanically, not guessed. Of those, only
+# `torchcodec` and `gguf` were missing; the other 25 were present only
+# INCIDENTALLY, copied by some other package's hook. Listing them all makes that
+# a guarantee rather than a coincidence a dependency bump could withdraw.
+#
+# copy_metadata raises on an absent package, so a build fails loudly here rather
+# than shipping an exe that dies on model load. Metadata is a few KB apiece, so
+# being over-inclusive is close to free; a miss costs a full rebuild.
 _METADATA_CHECKED_AT_IMPORT = [
+    # diffusers + transformers dependency_versions_check (declared lists)
     "requests",
     "filelock",
     "numpy",
@@ -326,6 +346,23 @@ _METADATA_CHECKED_AT_IMPORT = [
     "safetensors",
     "accelerate",
     "pyyaml",
+    # swept: read via importlib.metadata at import time somewhere in the chain
+    "torchcodec",       # transformers/audio_utils.py:55 -- was missing
+    "gguf",             # diffusers -- was missing
+    "bitsandbytes",
+    "datasets",
+    "dill",
+    "duckdb",
+    "fsspec",
+    "kernels",
+    "opentelemetry-api",
+    "pandas",
+    "peft",
+    "polars",
+    "pyarrow",
+    "torch",
+    "torchao",
+    "transformers",
 ]
 for _dist in _METADATA_CHECKED_AT_IMPORT:
     try:
