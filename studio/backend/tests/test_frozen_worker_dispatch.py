@@ -116,6 +116,65 @@ def test_shim_precedes_the_heavy_imports():
     )
 
 
+def test_frozen_intercepts_multiprocessing_fork():
+    """A spawn child must reach spawn_main(), not the app's argparse.
+
+    Frozen, multiprocessing launches children as
+    [sys.executable, "--multiprocessing-fork", <kwds>]. Without
+    multiprocessing.freeze_support() at the entry point those arguments hit
+    argparse and every training/export/inference worker dies at exit 2.
+
+    The handles below are deliberately bogus, so the child fails inside
+    spawn_main -- reaching it at all is the proof of interception.
+    """
+    proc = _drive(
+        frozen = True,
+        argv = ["run.py", "--multiprocessing-fork", "tracker_fd=3", "pipe_handle=4"],
+    )
+    out = proc.stdout + proc.stderr
+    assert "unrecognized arguments" not in out, (
+        "the spawn child fell through to the app's argparse -- freeze_support() "
+        f"is not being called early enough:\n{out[:2000]}"
+    )
+    assert "spawn_main" in out, f"never reached spawn_main:\n{out[:2000]}"
+
+
+def test_not_frozen_ignores_multiprocessing_fork():
+    """Negative control: without sys.frozen, freeze_support() must do nothing.
+
+    CPython gates it on sys.frozen, so an unfrozen run falls through to argparse
+    exactly as it does today. If this ever starts intercepting, the shim is
+    firing on argv shape alone and would hijack a source-tree run.
+    """
+    proc = _drive(
+        frozen = False,
+        argv = ["run.py", "--multiprocessing-fork", "tracker_fd=3", "pipe_handle=4"],
+    )
+    out = proc.stdout + proc.stderr
+    assert "spawn_main" not in out, (
+        f"intercepted despite sys.frozen being unset -- the guard is inert:\n{out[:2000]}"
+    )
+    assert "unrecognized arguments" in out, out[:2000]
+
+
+@pytest.mark.skipif(not _SPEC.is_file(), reason = "packaging spec not present")
+def test_spec_copies_metadata_checked_at_import():
+    """diffusers/transformers read importlib.metadata at IMPORT time.
+
+    PyInstaller bundles modules by following imports but copies a package's
+    .dist-info only when a hook asks, so `import requests` succeeded while
+    importlib.metadata.version("requests") raised and selecting a diffusion
+    model died with "The 'requests' distribution was not found".
+    """
+    spec = _SPEC.read_text(encoding = "utf-8")
+    assert "copy_metadata" in spec, "spec no longer copies any distribution metadata"
+    for dist in ("requests", "filelock", "numpy", "tokenizers", "safetensors"):
+        assert dist in spec, (
+            f"{dist} dropped from the metadata list; diffusers/transformers "
+            "version-check it at import, so a frozen build would fail on model select"
+        )
+
+
 @pytest.mark.skipif(not _SPEC.is_file(), reason = "packaging spec not present")
 def test_spec_bundles_the_spawned_worker():
     """The other half: dispatch is useless if the module is not in the bundle.

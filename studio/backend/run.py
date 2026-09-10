@@ -155,6 +155,35 @@ if __name__ == "__main__" and getattr(sys, "frozen", False) and len(sys.argv) > 
     # Only reached when the worker returns instead of calling sys.exit().
     raise SystemExit(0)
 
+# Same problem, different mechanism: multiprocessing's own spawn children.
+#
+# Studio starts its training, export, inference and data-recipe workers with
+# mp.get_context("spawn"). Frozen, multiprocessing.spawn.get_command_line()
+# launches each child as [sys.executable, "--multiprocessing-fork", <kwds>], and
+# multiprocessing.freeze_support() is what a frozen app must call to intercept
+# that. Nothing called it, so every spawn child ran the app from the top and
+# died in argparse with
+#   Unslothed.exe: error: unrecognized arguments: --multiprocessing-fork ...
+#
+# PyInstaller's pyi_rth_multiprocessing hook does NOT do this for us -- read it:
+# it only REPLACES multiprocessing.freeze_support with its own implementation,
+# so the app still has to make the call. Confirmed empirically before fixing:
+# the built exe answered `--multiprocessing-fork tracker_fd=3 pipe_handle=4`
+# with an argparse error and exit 2.
+#
+# A no-op unless this really is a spawn child -- it is gated twice, verified
+# against CPython's source rather than assumed:
+#   BaseContext.freeze_support() returns unless sys.frozen is set AND the start
+#   method is spawn/None, so a source-tree run does nothing at all;
+#   spawn.freeze_support() then returns unless sys.argv[1] is exactly
+#   "--multiprocessing-fork", so a frozen NORMAL launch also does nothing.
+# Placed here, above the heavy imports, so a child starts its real work without
+# first paying for the whole app's startup.
+if __name__ == "__main__":
+    import multiprocessing
+
+    multiprocessing.freeze_support()
+
 # First, so these vars land before anything below can size an OpenMP/BLAS pool. Imports stdlib only.
 from utils.cpu_threads import configure_cpu_threads
 
