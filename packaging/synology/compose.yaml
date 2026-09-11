@@ -1,0 +1,66 @@
+# Unslothed on a Synology NAS, via Container Manager.
+#
+# Upload this as a Container Manager "Project" (Container Manager > Project >
+# Create > "Upload docker-compose.yml"). See README.md beside this file for the
+# exact DSM steps and the directory that must exist first.
+#
+# LITERAL VALUES ONLY -- no ${VAR} substitution anywhere. DSM's Container
+# Manager runs its docker-project resource worker BEFORE a package's postinst,
+# so an .env file never lands in time and ${VAR} expands to an empty string.
+# That produces the famously unhelpful
+#     invalid spec: :/data:z: empty section between colons
+# Edit the values in this file directly instead.
+
+services:
+  unslothed:
+    image: xbxhkz/unslothed:cpu
+    container_name: unslothed
+
+    # DSM does not auto-create bind-mount source directories the way plain
+    # Docker does. /volume1/docker/unslothed MUST exist and be owned by 1000:1000
+    # before the first start, or the container dies with
+    #     Bind mount failed: /volume1/docker/unslothed does not exist
+    # and, if it exists but is root-owned, with
+    #     sqlite3.OperationalError: unable to open database file
+    # because the container drops to UID/GID 1000.
+    volumes:
+      - /volume1/docker/unslothed:/data
+
+    ports:
+      # host:container. 8000 is often taken on DSM; 8800 is a safe default.
+      # Reach the UI at http://<nas-ip>:8800
+      - "8800:8000"
+
+    environment:
+      # Studio resolves its data root from this before anything else, so every
+      # model, chat and credential lands on the volume above.
+      UNSLOTH_STUDIO_HOME: /data
+      # ultralytics writes a settings file on first import and falls back to
+      # /tmp with a four-line warning per call when its default is unwritable.
+      YOLO_CONFIG_DIR: /data/ultralytics
+      # Dual Xeon Gold 6130 = 32 cores / 64 threads. Left unset, the BLAS/OpenMP
+      # pools size themselves to every thread and thrash. 32 keeps one pool per
+      # physical core; lower it if you run other containers on this NAS.
+      UNSLOTH_CPU_THREADS: "32"
+      # No NVIDIA Container Toolkit on DSM, so nothing CUDA can initialise.
+      # Being explicit avoids a slow probe and a misleading warning at startup.
+      CUDA_VISIBLE_DEVICES: ""
+
+    # Set a real password on first run, then remove this line and recreate.
+    # Leaving it unset makes Studio generate one and print it to the log, which
+    # on DSM means digging through Container Manager's log viewer to find it.
+    # command: ["--password", "change-me-on-first-login"]
+
+    restart: unless-stopped
+
+    # No healthcheck here on purpose. The image already declares one
+    #     HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=5
+    #         CMD curl -fsS http://127.0.0.1:8000/api/health || exit 1
+    # (Dockerfile:301), curl is installed for exactly that, and the 180s start
+    # period already covers the slow first run that initialises the data root.
+    # Re-declaring it here would only risk drifting from the image's version.
+
+    # 320 GB of RAM is plenty, but an unbounded container can still starve DSM
+    # itself if a model load goes wrong. Adjust to taste; remove to uncap.
+    mem_limit: 64g
+    shm_size: 2g
