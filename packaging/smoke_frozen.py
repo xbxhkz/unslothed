@@ -185,6 +185,63 @@ def _wan():
     return f"{cls.__module__}.{cls.__name__}"
 
 
+# --- native extensions and bundled data the import graph does not guarantee ---
+# These are not tied to one past defect; they are the remaining frozen-fragile
+# surface, added after probing the built exe showed they were the only
+# Unslothed-relevant features that had never been executed from a frozen build.
+@check("sqlite_vec vec0 extension loads and queries")
+def _sqlite_vec():
+    # A native .dll loaded at runtime by path, not by import -- so a build can
+    # import sqlite_vec happily and still have no working vector search. Run a
+    # real vec0 query rather than trusting the import.
+    import sqlite3
+
+    import sqlite_vec
+
+    db = sqlite3.connect(":memory:")
+    db.enable_load_extension(True)
+    sqlite_vec.load(db)
+    (v,) = db.execute("select vec_version()").fetchone()
+    db.execute("create virtual table t using vec0(e float[4])")
+    db.execute("insert into t(rowid, e) values (1, ?)", [sqlite_vec.serialize_float32([1, 2, 3, 4])])
+    assert db.execute("select rowid from t").fetchall() == [(1,)]
+    return f"vec_version={v}, vec0 insert+select works"
+
+
+@check("vision tool stack (cv2 / insightface / ultralytics / onnxruntime)")
+def _vision():
+    import cv2
+    import insightface  # noqa: F401
+    import onnxruntime
+    import ultralytics  # noqa: F401
+
+    # cv2 and onnxruntime read their own data via __file__-relative paths, which
+    # is why they need pyinstaller-hooks-contrib; assert the hooks did their job.
+    return f"cv2 {cv2.__version__}, ort {onnxruntime.__version__}"
+
+
+@check("diceware wordlist (first-run bootstrap password)")
+def _diceware():
+    # Found by launching the exe against an EMPTY UNSLOTH_STUDIO_HOME -- every
+    # earlier test pointed at a home that already had a password, so the crash
+    # never fired. The wordlist is data, resolved through an entry-point-style
+    # spec dict.
+    import diceware
+
+    from diceware.wordlist import get_wordlist_names
+
+    names = get_wordlist_names()
+    assert names, "diceware has no wordlists -- bootstrap password generation will crash"
+    return f"diceware {getattr(diceware, '__version__', '?')}, {len(names)} wordlists"
+
+
+@check("psutil (hardware monitor)")
+def _psutil():
+    import psutil
+
+    return f"ram_free={psutil.virtual_memory().available // 2**30}GB"
+
+
 def main() -> int:
     print("=" * 72)
     print("Unslothed frozen smoke test")
