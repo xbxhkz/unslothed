@@ -163,6 +163,38 @@ if (Test-Path $warnFile) {
     Write-Host "  WARNING: no warn-Unslothed.txt found at $warnFile (PyInstaller normally always writes one)." -ForegroundColor Yellow
 }
 
+Write-Step "Smoke-testing the built exe"
+# Runs packaging\smoke_frozen.py INSIDE the freshly built Unslothed.exe, via the
+# frozen `-m` shim, then deletes it again so it is never packaged.
+#
+# This gate exists because eight defects shipped in builds that looked perfect:
+# spawned workers, .dist-info metadata, data files opened beside a module's own
+# source, a stdlib module only torchvision imports, and triton's entry points.
+# Not one is reachable from the Python test suite -- they are only reachable
+# from a frozen exe, because each is something PyInstaller's import graph cannot
+# see. Every one was found by a user hitting it, at ~50 minutes per rebuild.
+#
+# It runs BEFORE ISCC on purpose: a failure must stop the build rather than
+# produce an installer that is already known-broken.
+$smokeSrc = Join-Path $Packaging "smoke_frozen.py"
+$smokeDst = Join-Path $Packaging "dist\Unslothed\_internal\_smoke_frozen.py"
+if (-not (Test-Path $smokeSrc)) { Fail "no smoke test at $smokeSrc" }
+Copy-Item $smokeSrc $smokeDst -Force
+try {
+    & $appExe "-m" "_smoke_frozen"
+    $smokeExit = $LASTEXITCODE
+} finally {
+    # Always remove it, including when the smoke test failed or threw: the file
+    # must never reach Inno Setup, which copies dist\Unslothed\* recursively.
+    Remove-Item $smokeDst -Force -ErrorAction SilentlyContinue
+}
+if ($smokeExit -ne 0) {
+    Fail ("the built exe failed its smoke test (exit $smokeExit) -- see the PASS/FAIL " +
+          "lines above. Do not ship this build; each failing check names the commit " +
+          "that fixed the defect it guards.")
+}
+Write-Host "  smoke test passed"
+
 Write-Step "Locating Inno Setup"
 $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
 if (-not (Test-Path $iscc)) { $iscc = "$env:ProgramFiles\Inno Setup 6\ISCC.exe" }
