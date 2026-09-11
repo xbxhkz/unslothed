@@ -120,6 +120,22 @@ def _maybe_reexec_for_cuda_ld_path():
 # Suppress C-level dependency warnings globally (e.g. SwigPyPacked).
 os.environ["PYTHONWARNINGS"] = "ignore"
 
+# DO NOT enable DIFFUSERS_GGUF_CUDA_KERNELS here. It looks like the obvious fix
+# for slow GGUF video generation -- with it off, GGUFLinear.forward() takes
+# forward_native(), which re-dequantizes the whole weight tensor on EVERY
+# forward, every layer, every denoise step -- but on Windows it makes things
+# strictly worse, not faster:
+#
+#   diffusers/quantizers/gguf/utils.py calls get_kernel("Isotr0py/ggml") at
+#   MODULE IMPORT time with no try/except. That repo publishes no Windows build
+#   variant (checked 2026-09-10: it offers none of torch210-cu130-x86_64-windows,
+#   torch-cuda or torch-universal), so the call raises FileNotFoundError and
+#   importing the GGUF quantizer fails outright -- taking model loading with it.
+#
+# Verified by probing the frozen exe before shipping the change, which is the
+# only reason it was caught. Revisit only if that repo starts publishing a
+# Windows variant; the flag alone is not the missing piece.
+
 # Add the backend dir to sys.path early so local modules import.
 backend_dir = Path(__file__).parent
 if str(backend_dir) not in sys.path:
