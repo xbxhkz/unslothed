@@ -13,7 +13,21 @@
 
 services:
   unslothed:
-    image: xbxhkz/unslothed:cpu
+    # PINNED on purpose. Container Manager happily reuses a cached ":cpu" it has
+    # already seen, so a Reset after a Docker Hub update can silently keep the
+    # OLD image -- which is how you end up staring at a bug that is already
+    # fixed. A tag it has never pulled cannot be served from cache.
+    #
+    # cpu-c39f46e is the first image that CONTAINS a llama.cpp runtime. Before
+    # it, every GGUF model failed with "no executable llama.cpp runtime
+    # (llama-server) is available. Run `unsloth studio setup`" -- advice that
+    # cannot be followed inside a container. The runtime now lives at
+    # /opt/llama.cpp in the image (NOT under /data, which is your bind mount and
+    # would mask it), found via UNSLOTH_LLAMA_CPP_PATH baked into the image.
+    #
+    # To move to a newer build later, change this line to the new cpu-<sha> tag
+    # rather than switching back to the floating :cpu.
+    image: xbxhkz/unslothed:cpu-c39f46e
     container_name: unslothed
 
     # DSM does not auto-create bind-mount source directories the way plain

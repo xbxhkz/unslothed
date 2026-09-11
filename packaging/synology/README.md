@@ -6,7 +6,14 @@ package's `postinst`, so a `postinst`-written `.env` never lands in time and any
 `${VAR}` in the compose file expands to an empty string. `compose.yaml` beside
 this file therefore uses **literal values only**.
 
-Image: `xbxhkz/unslothed:cpu` (public on Docker Hub, ~8.2 GB).
+Image: `xbxhkz/unslothed:cpu-c39f46e` (public on Docker Hub, ~1.9 GB compressed).
+
+`compose.yaml` pins an exact tag rather than floating `:cpu`. Container Manager
+reuses a cached `:cpu` it has already pulled, so after a Docker Hub update a
+Reset can silently keep the OLD image; a tag it has never seen cannot come from
+cache. `cpu-c39f46e` is the first build containing a llama.cpp runtime -- before
+it, every GGUF failed with *"no executable llama.cpp runtime (llama-server) is
+available"*.
 
 ---
 
@@ -110,12 +117,18 @@ own logs. Use real SSH for anything under `/var/log/`.
 
 ## Updating
 
+Edit the `image:` line in `compose.yaml` to the new `cpu-<sha>` tag, then
+**Project → Action → Build** (or Stop → Build → Start) so Container Manager
+re-reads the file and pulls the new tag.
+
 ```sh
-# on the NAS, or via Container Manager's "Reset" on the project
-docker pull xbxhkz/unslothed:cpu
+# optional: pre-pull on the NAS so the project start is not waiting on a download
+docker pull xbxhkz/unslothed:cpu-<sha>
 ```
 
-then **Project → Action → Reset** (or Stop/Start) to recreate the container.
-Everything under `/data` persists across updates; the image carries no state.
+Everything under `/data` persists across updates; the image carries no state, so
+rolling back is just pinning the previous `cpu-<sha>` tag again.
 
-`xbxhkz/unslothed:cpu-<sha>` tags pin an exact build if you need to roll back.
+Avoid switching the pin back to floating `:cpu` -- that is precisely the case
+where Container Manager can serve a stale cached image and leave you debugging a
+bug that was already fixed.
