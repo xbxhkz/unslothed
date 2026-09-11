@@ -453,6 +453,45 @@ hiddenimports += collect_submodules("triton")
 datas += collect_data_files("triton")
 datas += copy_metadata("triton-windows")
 
+# TorchScript needs SOURCE, and a PYZ module has none.
+#
+# diffusers/pipelines/kolors/text_encoder.py torch.jit.script's a function, and
+# torch.jit reads the function's source with inspect.getsource() at runtime.
+# Frozen, that module lives compiled in the PYZ with no .py on disk, so the
+# import died with
+#   Can't get source for <function apply_rotary_pos_emb ...>. TorchScript
+#   requires source access in order to carry out compilation
+# taking diffusers.pipelines.auto_pipeline down with it, since auto_pipeline
+# eagerly imports every pipeline including kolors.
+#
+# inspect.getsource resolves through the module's __file__, which frozen points
+# at <_MEIPASS>/diffusers/pipelines/kolors/text_encoder.py -- so shipping the
+# .py AT THAT PATH is enough; linecache then reads it. Verified by hot-patching
+# exactly this one file into a built _internal/ and re-running the import, which
+# went from RuntimeError to exit 0.
+#
+# Scoped to the one file on purpose: a sweep of diffusers found torch.jit.script
+# in this module alone, and the backend itself uses none. Collecting all of
+# diffusers' sources would cost ~50 MB to fix nothing further. 36 KB.
+try:
+    import diffusers as _diffusers_probe
+
+    _KOLORS_SRC = (
+        Path(_diffusers_probe.__file__).parent / "pipelines" / "kolors" / "text_encoder.py"
+    )
+except Exception as _exc:  # pragma: no cover - diffusers absent from the build venv
+    _KOLORS_SRC = None
+    print(f"[Unslothed.spec] WARNING: could not locate diffusers ({_exc})")
+if _KOLORS_SRC is not None and _KOLORS_SRC.is_file():
+    datas.append((str(_KOLORS_SRC), "diffusers/pipelines/kolors"))
+    print(f"[Unslothed.spec] kolors source for TorchScript: {_KOLORS_SRC}")
+elif _KOLORS_SRC is not None:  # pragma: no cover - diffusers restructured
+    print(
+        "[Unslothed.spec] WARNING: kolors text_encoder.py not found at "
+        f"{_KOLORS_SRC}; diffusers.pipelines.auto_pipeline may fail to import "
+        "in the frozen build (TorchScript needs source access)."
+    )
+
 # diceware generates the bootstrap admin password on a FIRST RUN with no
 # password set (auth/storage.py's generate_bootstrap_password). Found by
 # launching the built exe against an EMPTY UNSLOTH_STUDIO_HOME, which is the

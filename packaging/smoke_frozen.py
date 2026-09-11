@@ -185,6 +185,18 @@ def _wan():
     return f"{cls.__module__}.{cls.__name__}"
 
 
+@check("AutoPipeline imports (TorchScript needs source, a PYZ module has none)")
+def _auto_pipeline():
+    # kolors/text_encoder.py torch.jit.script's a function, and torch.jit reads
+    # its source with inspect.getsource() at runtime. Compiled into the PYZ
+    # there is no .py to read, so this died with "Can't get source for
+    # apply_rotary_pos_emb" -- and took auto_pipeline with it, since that
+    # eagerly imports every pipeline. Fixed by shipping that one .py at the path
+    # __file__ points to. Guarded here because nothing else would notice.
+    importlib.import_module("diffusers.pipelines.auto_pipeline")
+    return "kolors source resolved via inspect.getsource"
+
+
 # --- native extensions and bundled data the import graph does not guarantee ---
 # These are not tied to one past defect; they are the remaining frozen-fragile
 # surface, added after probing the built exe showed they were the only

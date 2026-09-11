@@ -583,6 +583,48 @@ def run_export_process(*, cmd_queue: Any, resp_queue: Any, config: dict) -> None
                 'Install for better performance: pip install "triton-windows<3.7"'
             )
 
+    # ── 1b-ii. Importable is not usable (frozen builds, and any machine
+    # without a working CUDA driver) ──
+    #
+    # The check above treats `import triton` succeeding as "torch.compile
+    # works". In the PyInstaller build triton is always importable because it is
+    # bundled, so that test passes unconditionally -- it stayed green through an
+    # entire session in which triton was completely non-functional, and video
+    # generation died with
+    #     RuntimeError: 0 active drivers ([]). There should only be one.
+    # raised from inside inductor's codegen, long after this point.
+    #
+    # The same gap hits a machine with no NVIDIA GPU, or a broken/mismatched
+    # driver: triton imports, every backend is discovered, and none is ACTIVE.
+    #
+    # Purely additive on purpose -- it only ever tightens the block above, never
+    # re-enables what that disabled, so this file keeps a zero-deletion diff
+    # against upstream.
+    #
+    # Safe to import torch here despite the comment above: torch._dynamo reads
+    # TORCHDYNAMO_DISABLE inside optimize() at CALL time
+    # (torch/_dynamo/eval_frame.py, returning a null decorator), not when the
+    # module is imported, and `import torch` does not import torch._dynamo at
+    # all. Both verified against torch 2.10 source before relying on it.
+    if sys.platform == "win32" and os.environ.get("TORCHDYNAMO_DISABLE") != "1":
+        try:
+            from triton.backends import backends as _triton_backends
+
+            _active = [n for n, b in _triton_backends.items() if b.driver.is_active()]
+            if not _active:
+                raise RuntimeError(
+                    f"no active triton driver (discovered: {list(_triton_backends)})"
+                )
+            logger.info("Triton driver active: %s", ", ".join(_active))
+        except Exception as exc:
+            os.environ["TORCHDYNAMO_DISABLE"] = "1"
+            logger.warning(
+                "Triton is importable but not usable (%s) — torch.compile disabled. "
+                "Export will run eager: slower, but it runs. This is expected on a "
+                "machine with no CUDA GPU.",
+                exc,
+            )
+
     # ── 1c. Stub torchao on Windows ROCm ──
     # See core/_torchao_stub.py: torchao crashes on Windows ROCm (RCCL absent).
     # No-op off Windows ROCm. Must run before importing transformers / unsloth_zoo.
