@@ -13,26 +13,28 @@ Image: `xbxhkz/unslothed:cpu` (public on Docker Hub, ~8.2 GB).
 ## 1. Create the data directory first
 
 DSM's Container Manager does **not** auto-create bind-mount source directories
-the way plain `docker run` does, and the container drops to UID/GID 1000. Both
-of these have to be right before the first start or it fails in ways that do not
-name the cause.
-
-SSH into the NAS and run:
+the way plain `docker run` does. SSH into the NAS and run:
 
 ```sh
 sudo mkdir -p /volume1/docker/unslothed
-sudo chown -R 1000:1000 /volume1/docker/unslothed
 ```
 
-| Skipped step | What you get instead |
-|---|---|
-| directory missing | `Bind mount failed: /volume1/docker/unslothed does not exist` |
-| wrong owner | `sqlite3.OperationalError: unable to open database file` |
+Skip it and the container dies with
+`Bind mount failed: /volume1/docker/unslothed does not exist`.
 
 If `/volume1` is not your volume, change it in **both** the command above and
-`compose.yaml`. DSM shared-folder ACLs can override POSIX ownership — if `chown`
-looks correct and it still cannot write, check the shared folder's permissions
-in DSM rather than re-running `chown`.
+`compose.yaml`.
+
+**No `chown` is needed for this image**, unlike `xbxhkz/assist`. This one has no
+`USER` directive and its entrypoint drops no privileges — verified by running
+it: `id` reports `uid=0(root)`, and it creates `/data/auth` as
+`drwx------ root root`. So the "unable to open database file" failure that the
+Assist deployment hit does not apply here.
+
+The consequence worth knowing: everything under that path ends up **root-owned**,
+so browsing or deleting it in File Station needs an admin account. That is also
+the trade-off of the container running as root — acceptable on a private LAN
+NAS, worth a second thought if this port is ever exposed beyond it.
 
 ## 2. Create the project
 
@@ -89,10 +91,8 @@ other containers share the NAS.
 ## Troubleshooting
 
 **Container restart-loops immediately.** Almost always the bind mount. Check the
-directory exists and is `1000:1000` (step 1).
-
-**UI loads but login fails.** The data root was created root-owned on first
-start. Stop the project, `chown -R 1000:1000 /volume1/docker/unslothed`, start.
+directory exists (step 1). Ownership is not the issue for this image -- it runs
+as root.
 
 **Port 8800 already in use.** Change the host side of `"8800:8000"` only — the
 container side must stay 8000, which is what the image's healthcheck probes.

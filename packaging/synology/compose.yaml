@@ -17,12 +17,18 @@ services:
     container_name: unslothed
 
     # DSM does not auto-create bind-mount source directories the way plain
-    # Docker does. /volume1/docker/unslothed MUST exist and be owned by 1000:1000
-    # before the first start, or the container dies with
+    # Docker does, so /volume1/docker/unslothed MUST exist before the first
+    # start or the container dies with
     #     Bind mount failed: /volume1/docker/unslothed does not exist
-    # and, if it exists but is root-owned, with
-    #     sqlite3.OperationalError: unable to open database file
-    # because the container drops to UID/GID 1000.
+    #
+    # Ownership does NOT need changing for this image. Unlike xbxhkz/assist,
+    # this one has no USER directive and its entrypoint drops no privileges --
+    # verified by running it: `id` reports uid=0(root), and it creates
+    # /data/auth as drwx------ root root. So no `chown 1000:1000` step, and no
+    # "unable to open database file" failure mode here.
+    #
+    # The consequence to know about: everything under this path ends up
+    # root-owned, so File Station needs an admin account to browse or delete it.
     volumes:
       - /volume1/docker/unslothed:/data
 
