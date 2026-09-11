@@ -276,6 +276,42 @@ RUN pip install --no-deps /app
 
 COPY --from=frontend /build/studio/frontend/dist/ /app/studio/frontend/dist/
 
+# --- llama.cpp runtime --------------------------------------------------------
+# Without this the image starts, serves the UI, downloads models -- and then
+# refuses every GGUF with
+#   This is a GGUF model, but no executable llama.cpp runtime (llama-server) is
+#   available. Run `unsloth studio setup` ...
+# which is useless advice in a container. GGUF inference is the main reason to
+# run this image on a CPU box, so the runtime belongs in the image.
+#
+# INTO /opt, NOT the data root. llama_cpp.py's discovery looks under
+# <studio root>/llama.cpp, and the studio root here is /data -- a bind mount, so
+# anything installed there at BUILD time is masked the moment the volume is
+# attached. UNSLOTH_LLAMA_CPP_PATH is the seam for exactly this; the resolver's
+# own comment calls it "the explicit way to share a build across roots".
+#
+# The backend choice is pinned per tag rather than left to host detection: this
+# runs in a build container with no GPU, so :cuda would silently get a CPU
+# runtime. --force-cpu / --llama-backend cuda also RECORD the choice, so the
+# in-app updater re-asserts it instead of re-routing on a later update.
+#
+# ~239 MB, most of it the llama.cpp source tree that ships alongside the binary.
+# Kept whole on purpose: convert_hf_to_gguf.py and friends live there and the
+# export/quantise paths call them.
+COPY studio/install_llama_prebuilt.py /app/studio/
+RUN cd /app \
+    && if [ "${TORCH_FAMILY}" = "cpu" ]; then \
+        echo "llama.cpp: pinning CPU backend for the :cpu tag"; \
+        python studio/install_llama_prebuilt.py --install-dir /opt/llama.cpp --force-cpu; \
+    else \
+        echo "llama.cpp: requesting the cuda backend for TORCH_FAMILY=${TORCH_FAMILY}"; \
+        python studio/install_llama_prebuilt.py --install-dir /opt/llama.cpp --llama-backend cuda; \
+    fi \
+    && test -x /opt/llama.cpp/build/bin/llama-server \
+    && /opt/llama.cpp/build/bin/llama-server --version \
+    && (rm -rf /opt/.staging /tmp/* 2>/dev/null || true)
+ENV UNSLOTH_LLAMA_CPP_PATH=/opt/llama.cpp
+
 COPY packaging/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
