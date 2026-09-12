@@ -2169,4 +2169,27 @@ export const fr = {
         "S'applique aux chargements depuis les paramètres d'exécution. Les chargements automatiques — changement automatique via l'API, rechargement après inactivité ou application des paramètres de discussion — reviennent à la sélection automatique du modèle brouillon.",
     },
   },
+  toolAudit: {
+    title: "Activité des outils",
+    empty: "Aucun appel d'outil enregistré pour l'instant.",
+    degraded:
+      "Certains enregistrements d'audit n'ont pas pu être écrits ({count}). Le journal est incomplet.",
+    filterTool: "Filtrer par outil",
+    filterAll: "Tous les outils",
+    columnTime: "Heure",
+    columnTool: "Outil",
+    columnOutcome: "État",
+    columnDuration: "Durée",
+    outcomeRunning: "en cours",
+    outcomeOk: "réussi",
+    outcomeError: "erreur",
+    redactedBadge: "expurgé",
+    sandboxBypassBadge: "bac à sable contourné",
+    argumentsHeading: "Arguments",
+    resultHeading: "Résultat",
+    errorHeading: "Erreur",
+    truncatedNote:
+      "Affichage des 4 premiers et derniers Ko sur {bytes} octets.",
+    refresh: "Actualiser",
+  },
 } satisfies DeepPartialMessageTree<typeof en>;
