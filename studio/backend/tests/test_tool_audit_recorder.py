@@ -83,3 +83,24 @@ def test_large_results_are_capped_but_length_is_true():
 def test_disable_sandbox_is_recorded():
     tool_audit.around(_fake_tool, "terminal", {"command": "ls"}, disable_sandbox = True)
     assert tool_audit_db.query_entries()[0]["disable_sandbox"] is True
+
+
+def test_a_raising___str___does_not_break_the_tool_call():
+    """A successful tool result whose __str__ raises must still be returned.
+
+    The coercion to text for storage happens after the tool has already
+    succeeded; a bad __str__ on the result must degrade the audit, not cost
+    the caller its result.
+    """
+    class Explodes:
+        def __str__(self):
+            raise OverflowError("nope")
+
+    bad = Explodes()
+
+    def bad_tool(name, arguments, **kwargs):
+        return bad
+
+    out = tool_audit.around(bad_tool, "python", {})
+    assert out is bad, "a failed result-to-text coercion must not cost the caller its result"
+    assert tool_audit.degraded_count() >= 1, "and the failure must be counted, not silent"

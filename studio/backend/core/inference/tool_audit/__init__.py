@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import threading
 import time
 from typing import Any, Callable
 
@@ -31,6 +32,11 @@ logger = logging.getLogger(__name__)
 RESULT_CAP_BYTES = 4096
 
 _degraded = 0
+# Tool calls run concurrently -- multiple agentic loops share this process --
+# so the counter's increment must not race and silently lose updates. An
+# inaccurate degraded count is a partial instance of the exact failure mode
+# the counter exists to prevent.
+_degraded_lock = threading.Lock()
 
 
 def degraded_count() -> int:
@@ -39,12 +45,14 @@ def degraded_count() -> int:
 
 def reset_degraded_for_tests() -> None:
     global _degraded
-    _degraded = 0
+    with _degraded_lock:
+        _degraded = 0
 
 
 def _note_failure(what: str, exc: BaseException) -> None:
     global _degraded
-    _degraded += 1
+    with _degraded_lock:
+        _degraded += 1
     logger.warning("tool audit %s failed (%s); tool execution unaffected", what, exc)
 
 
@@ -89,18 +97,23 @@ def around(fn: Callable[..., str], *args: Any, **kwargs: Any) -> str:
     try:
         result = fn(*args, **kwargs)
     except BaseException as exc:
-        _finish(row_id, started, outcome = "error", text = "", error = repr(exc))
+        _finish(row_id, started, outcome = "error", result = "", error = repr(exc))
         raise
-    _finish(row_id, started, outcome = "ok", text = result if isinstance(result, str) else str(result))
+    _finish(row_id, started, outcome = "ok", result = result)
     return result
 
 
-def _finish(row_id, started: float, *, outcome: str, text: str, error: str | None = None) -> None:
+def _finish(row_id, started: float, *, outcome: str, result: Any, error: str | None = None) -> None:
     if row_id is None:
         return
     try:
         from storage import tool_audit_db
 
+        # The str() coercion happens INSIDE this guard, not in around()'s frame:
+        # a successful tool call must not be broken by a result whose __str__
+        # raises (an OverflowError-shaped object is exactly the precedent this
+        # module's docstring cites).
+        text = result if isinstance(result, str) else str(result)
         head, tail, size, digest = _split_result(text)
         tool_audit_db.record_finish(
             row_id,
