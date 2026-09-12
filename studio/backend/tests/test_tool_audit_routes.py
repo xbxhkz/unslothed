@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from auth.authentication import get_current_subject
 from routes.tool_audit import router
 from storage import tool_audit_db
 
@@ -19,6 +20,13 @@ def client(tmp_path, monkeypatch):
     tool_audit_db.reset_for_tests()
     app = FastAPI()
     app.include_router(router, prefix = "/api/tool-audit")
+    # Every endpoint depends on get_current_subject; these tests exercise
+    # behaviour behind auth, not auth itself, so the dependency is overridden
+    # rather than satisfied with a real credential. dependency_overrides is
+    # the supported seam for this -- Depends() captures the function object at
+    # import time, so monkeypatching the auth module attribute would not
+    # affect routes already bound to it.
+    app.dependency_overrides[get_current_subject] = lambda: "test-subject"
     return TestClient(app)
 
 
@@ -63,3 +71,20 @@ def test_status_reports_degradation(client):
     body = client.get("/api/tool-audit/status").json()
     assert body["degraded"] is False
     assert body["failed_writes"] == 0
+
+
+def test_entries_requires_authentication(tmp_path, monkeypatch):
+    """These endpoints return a forensic record of every tool run on the
+    machine, arguments included. Without a live auth dependency they would be
+    a complete activity log readable by anyone who can reach the port, so
+    this asserts the guard is actually wired -- not just present on the
+    other, overridden client -- and stays red if a future edit drops it."""
+    monkeypatch.setenv("UNSLOTH_STUDIO_HOME", str(tmp_path))
+    tool_audit_db.reset_for_tests()
+    app = FastAPI()
+    app.include_router(router, prefix = "/api/tool-audit")
+    unauthenticated_client = TestClient(app)
+
+    r = unauthenticated_client.get("/api/tool-audit/entries")
+
+    assert r.status_code in (401, 403)

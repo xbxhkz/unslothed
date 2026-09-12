@@ -12,9 +12,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from auth.authentication import get_current_subject
 from core.inference import tool_audit
 from storage import tool_audit_db
 
@@ -32,6 +33,7 @@ def list_entries(
     offset: int = Query(0, ge = 0),
     tool_name: Optional[str] = None,
     session_id: Optional[str] = None,
+    current_subject: str = Depends(get_current_subject),
 ) -> dict:
     entries = tool_audit_db.query_entries(
         limit = limit,
@@ -43,7 +45,10 @@ def list_entries(
 
 
 @router.get("/entries/{entry_id}")
-def get_entry(entry_id: int) -> dict:
+def get_entry(
+    entry_id: int,
+    current_subject: str = Depends(get_current_subject),
+) -> dict:
     entry = tool_audit_db.get_entry(entry_id)
     if entry is None:
         raise HTTPException(status_code = 404, detail = "No such audit entry")
@@ -51,6 +56,8 @@ def get_entry(entry_id: int) -> dict:
 
 
 @router.get("/status", response_model = AuditStatus)
-def status() -> AuditStatus:
+def status(
+    current_subject: str = Depends(get_current_subject),
+) -> AuditStatus:
     failed = tool_audit.degraded_count()
     return AuditStatus(degraded = failed > 0, failed_writes = failed)
