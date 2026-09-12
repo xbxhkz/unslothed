@@ -10189,6 +10189,31 @@ def execute_tool(
     return f"Unknown tool: {name}"
 
 
+# --- fork: tool audit -------------------------------------------------------
+# Shadowing here, rather than wrapping execute_tool's body in try/finally, is
+# what keeps this seam additive: the body is ~160 lines with many returns, so a
+# try: would re-indent all of them and every line would read as modified.
+#
+# This is NOT an external monkeypatch. It runs inside this module's own body,
+# before the module finishes executing and therefore before any importer can
+# bind the name -- so all three callers (studio_tool_loop, safetensors_agentic,
+# and llama_cpp, which this fork does not edit) get the audited version
+# deterministically rather than by import order.
+#
+# functools.wraps is load-bearing: studio_tool_loop gates kwarg forwarding on
+# accepts_kwarg(execute_tool, ...), which uses inspect.signature, and that
+# follows __wrapped__. Without it the wrapper would report (*args, **kwargs) and
+# silently disable conversation-branch and budget forwarding.
+_execute_tool_unaudited = execute_tool
+
+
+@functools.wraps(_execute_tool_unaudited)
+def execute_tool(*args, **kwargs):  # noqa: F811 - deliberate shadow, see above
+    from core.inference import tool_audit
+
+    return tool_audit.around(_execute_tool_unaudited, *args, **kwargs)
+
+
 def _opt_int(v) -> int | None:
     try:
         return int(v) if v is not None else None
