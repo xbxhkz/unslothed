@@ -101,7 +101,8 @@ test("a customized version-5 sidebar keeps its order and only gains Audio", () =
   );
   assert.deepEqual(
     customization.sidebarNav.map((item) => item.id),
-    [...customizedV5.map((item) => item.id), "audio"],
+    // Both ids missing from this v5 layout land at the end, in SIDEBAR_NAV_ITEM_IDS order.
+    [...customizedV5.map((item) => item.id), "audio", "toolAudit"],
   );
   assert.equal(customization.sidebarNav.at(-1)?.pinned, false);
 });

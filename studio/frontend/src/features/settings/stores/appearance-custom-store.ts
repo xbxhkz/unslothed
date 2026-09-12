@@ -99,6 +99,7 @@ export const SIDEBAR_NAV_ITEM_IDS = [
   "recipes",
   "export",
   "api",
+  "toolAudit",
 ] as const;
 
 export type SidebarNavItemId = (typeof SIDEBAR_NAV_ITEM_IDS)[number];
@@ -121,6 +122,9 @@ export const SIDEBAR_NAV_DEFAULT_PINNED: Record<SidebarNavItemId, boolean> = {
   recipes: false,
   export: false,
   api: false,
+  // Under "More" until a user pins it, matching every other row introduced
+  // after the shipped default -- api and audio both landed unpinned too.
+  toolAudit: false,
 };
 
 /** Every previously shipped layout, so a migration can tell an untouched install from one the

@@ -76,6 +76,7 @@ import {
   ArrowDown01Icon,
   ArrowRight02Icon,
   ArrowUp01Icon,
+  Audit01Icon,
   BadgeInfoIcon,
   BookOpen01Icon,
   BubbleChatIcon,
@@ -1817,6 +1818,18 @@ export function AppSidebar() {
       },
       onIntent: () => {
         preloadSilently(router.preloadRoute({ to: "/api-monitor" }));
+      },
+    },
+    toolAudit: {
+      icon: Audit01Icon,
+      label: t("toolAudit.title"),
+      active: pathname === "/tool-audit" || pathname.startsWith("/tool-audit/"),
+      onClick: () => {
+        navigate({ to: "/tool-audit" });
+        closeMobileIfOpen();
+      },
+      onIntent: () => {
+        preloadSilently(router.preloadRoute({ to: "/tool-audit" }));
       },
     },
   };

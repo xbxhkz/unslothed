@@ -159,6 +159,9 @@ const CHAT_ONLY_ALLOWED = new Set([
   // Chat-only hosts serve the API like any other, so the monitor must be reachable there
   // or the overlay's "Expand" and the Settings API card redirect to /chat.
   "/api-monitor",
+  // Chat-only hosts still run tools -- and therefore still write audit rows --
+  // so the log must stay reachable there too, not just where training/export live.
+  "/tool-audit",
 ]);
 
 // Paths that render their own "still checking" state and self-gate once the verdict lands.

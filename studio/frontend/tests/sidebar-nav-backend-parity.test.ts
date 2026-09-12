@@ -17,7 +17,9 @@ test("the backend sidebar nav defaults match the frontend", async () => {
   );
   const block = /SIDEBAR_NAV_ITEM_DEFAULTS = \{([\s\S]*?)^\}/m.exec(source);
   assert.ok(block, "could not find SIDEBAR_NAV_ITEM_DEFAULTS in settings.py");
-  const backend = [...block[1].matchAll(/"([a-z]+)":\s*(True|False)/g)].map((m) => ({
+  // [a-zA-Z]+, not [a-z]+: sidebarNav ids were all single lowercase words until
+  // toolAudit, which is camelCase like the sidebarMenu ids (darkMode, guidedTour).
+  const backend = [...block[1].matchAll(/"([a-zA-Z]+)":\s*(True|False)/g)].map((m) => ({
     id: m[1],
     pinned: m[2] === "True",
   }));
@@ -40,7 +42,7 @@ test("Train and Video are still the capability-gated rows", async () => {
   assert.ok(rows, "could not find navRows in app-sidebar.tsx");
   // Split on the top-level row keys so each row's body can be checked on its own.
   const bodies = new Map<string, string>();
-  const keys = [...rows[1].matchAll(/^    ([a-z]+): \{$/gm)];
+  const keys = [...rows[1].matchAll(/^    ([a-zA-Z]+): \{$/gm)];
   keys.forEach((key, i) => {
     const start = key.index + key[0].length;
     const end = i + 1 < keys.length ? keys[i + 1].index : rows[1].length;
@@ -53,7 +55,7 @@ test("Train and Video are still the capability-gated rows", async () => {
   );
   const block = /SIDEBAR_NAV_ITEM_DEFAULTS = \{([\s\S]*?)^\}/m.exec(backend);
   assert.ok(block, "could not find SIDEBAR_NAV_ITEM_DEFAULTS in settings.py");
-  for (const [, id] of block[1].matchAll(/"([a-z]+)":/g)) {
+  for (const [, id] of block[1].matchAll(/"([a-zA-Z]+)":/g)) {
     assert.ok(bodies.has(id), `the backend ships a "${id}" row the sidebar does not define`);
   }
 
