@@ -2022,6 +2022,7 @@ export const zhCN = {
   toolAudit: {
     title: "工具活动",
     empty: "尚未记录任何工具调用。",
+    loadError: "无法加载工具活动。请重试。",
     degraded: "部分审计记录写入失败（{count}）。日志不完整。",
     filterTool: "按工具筛选",
     filterAll: "所有工具",

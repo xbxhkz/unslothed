@@ -20,21 +20,44 @@ type AuditEntry = {
   error_text: string | null;
 };
 
+const OUTCOME_KEYS = {
+  running: "toolAudit.outcomeRunning",
+  ok: "toolAudit.outcomeOk",
+  error: "toolAudit.outcomeError",
+} as const;
+
 export function ToolAuditPage(): ReactElement {
   const t = useT();
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [failedWrites, setFailedWrites] = useState(0);
   const [toolFilter, setToolFilter] = useState<string>("");
+  const [loadError, setLoadError] = useState(false);
 
   const load = useCallback(async () => {
     const qs = toolFilter ? `?tool_name=${encodeURIComponent(toolFilter)}` : "";
-    const [listRes, statusRes] = await Promise.all([
-      authFetch(`/api/tool-audit/entries${qs}`),
-      authFetch("/api/tool-audit/status"),
-    ]);
-    if (listRes.ok) setEntries((await listRes.json()).entries ?? []);
-    if (statusRes.ok) setFailedWrites((await statusRes.json()).failed_writes ?? 0);
+    try {
+      const [listRes, statusRes] = await Promise.all([
+        authFetch(`/api/tool-audit/entries${qs}`),
+        authFetch("/api/tool-audit/status"),
+      ]);
+      if (!listRes.ok || !statusRes.ok) {
+        throw new Error(
+          `tool-audit fetch failed: entries=${listRes.status} status=${statusRes.status}`,
+        );
+      }
+      const [listBody, statusBody] = await Promise.all([listRes.json(), statusRes.json()]);
+      setEntries(listBody.entries ?? []);
+      setFailedWrites(statusBody.failed_writes ?? 0);
+      setLoadError(false);
+    } catch (err) {
+      // Never let a fetch failure render as "0 rows": that's indistinguishable
+      // from a genuinely empty log, and on an audit surface those are opposite
+      // claims (nothing ran vs. we can't tell you what ran). The reason still
+      // reaches the console even though the UI shows a translated message.
+      console.error("tool-audit: failed to load", err);
+      setLoadError(true);
+    }
   }, [toolFilter]);
 
   useEffect(() => {
@@ -42,6 +65,11 @@ export function ToolAuditPage(): ReactElement {
   }, [load]);
 
   const tools = Array.from(new Set(entries.map((e) => e.tool_name))).sort();
+
+  const outcomeLabel = (outcome: string): string => {
+    const key = OUTCOME_KEYS[outcome as keyof typeof OUTCOME_KEYS];
+    return key ? t(key) : outcome;
+  };
 
   return (
     <div className="p-4 space-y-4">
@@ -63,6 +91,12 @@ export function ToolAuditPage(): ReactElement {
         </button>
       </div>
 
+      {loadError && (
+        <div role="alert" className="border border-amber-500 rounded p-2 text-sm">
+          {t("toolAudit.loadError")}
+        </div>
+      )}
+
       {failedWrites > 0 && (
         <div role="alert" className="border border-amber-500 rounded p-2 text-sm">
           {t("toolAudit.degraded", { count: failedWrites })}
@@ -70,7 +104,7 @@ export function ToolAuditPage(): ReactElement {
       )}
 
       {entries.length === 0 ? (
-        <p className="text-sm opacity-70">{t("toolAudit.empty")}</p>
+        loadError ? null : <p className="text-sm opacity-70">{t("toolAudit.empty")}</p>
       ) : (
         <table className="w-full text-sm">
           <thead>
@@ -122,7 +156,7 @@ export function ToolAuditPage(): ReactElement {
                     <span className="ml-1 text-xs">[{t("toolAudit.sandboxBypassBadge")}]</span>
                   )}
                 </td>
-                <td>{e.outcome}</td>
+                <td>{outcomeLabel(e.outcome)}</td>
                 <td>{e.duration_ms == null ? "-" : `${e.duration_ms} ms`}</td>
               </tr>
             ))}

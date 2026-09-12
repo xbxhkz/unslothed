@@ -2123,6 +2123,7 @@ export const ptBR = {
   toolAudit: {
     title: "Atividade de ferramentas",
     empty: "Nenhuma chamada de ferramenta registrada ainda.",
+    loadError: "Não foi possível carregar a atividade de ferramentas. Tente novamente.",
     degraded:
       "Alguns registros de auditoria falharam ao gravar ({count}). O log está incompleto.",
     filterTool: "Filtrar por ferramenta",

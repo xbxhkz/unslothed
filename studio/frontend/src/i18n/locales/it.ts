@@ -2161,6 +2161,7 @@ export const it = {
   toolAudit: {
     title: "Attività degli strumenti",
     empty: "Nessuna chiamata a strumenti ancora registrata.",
+    loadError: "Impossibile caricare l'attività degli strumenti. Riprova.",
     degraded:
       "Alcuni record di audit non sono stati scritti ({count}). Il registro è incompleto.",
     filterTool: "Filtra per strumento",

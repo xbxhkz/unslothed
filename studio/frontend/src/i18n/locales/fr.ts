@@ -2172,6 +2172,7 @@ export const fr = {
   toolAudit: {
     title: "Activité des outils",
     empty: "Aucun appel d'outil enregistré pour l'instant.",
+    loadError: "Impossible de charger l'activité des outils. Réessayez.",
     degraded:
       "Certains enregistrements d'audit n'ont pas pu être écrits ({count}). Le journal est incomplet.",
     filterTool: "Filtrer par outil",

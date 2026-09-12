@@ -2088,6 +2088,7 @@ export const en = {
   toolAudit: {
     title: "Tool activity",
     empty: "No tool calls recorded yet.",
+    loadError: "Could not load tool activity. Try refreshing.",
     degraded: "Some audit records failed to write ({count}). The log is incomplete.",
     filterTool: "Filter by tool",
     filterAll: "All tools",

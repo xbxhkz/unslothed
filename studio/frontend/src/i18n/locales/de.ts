@@ -2163,6 +2163,7 @@ export const de = {
   toolAudit: {
     title: "Tool-Aktivität",
     empty: "Noch keine Tool-Aufrufe aufgezeichnet.",
+    loadError: "Tool-Aktivität konnte nicht geladen werden. Bitte aktualisieren.",
     degraded:
       "Einige Audit-Einträge konnten nicht geschrieben werden ({count}). Das Protokoll ist unvollständig.",
     filterTool: "Nach Tool filtern",

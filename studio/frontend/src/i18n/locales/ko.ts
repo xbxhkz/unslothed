@@ -2096,6 +2096,7 @@ export const ko = {
   toolAudit: {
     title: "도구 활동",
     empty: "아직 기록된 도구 호출이 없습니다.",
+    loadError: "도구 활동을 불러오지 못했습니다. 다시 시도해 주세요.",
     degraded: "일부 감사 기록을 쓰지 못했습니다 ({count}건). 로그가 불완전합니다.",
     filterTool: "도구로 필터링",
     filterAll: "모든 도구",

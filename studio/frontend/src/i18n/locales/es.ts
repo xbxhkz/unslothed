@@ -2160,6 +2160,7 @@ export const es = {
   toolAudit: {
     title: "Actividad de herramientas",
     empty: "Aún no se han registrado llamadas a herramientas.",
+    loadError: "No se pudo cargar la actividad de herramientas. Intenta actualizar.",
     degraded:
       "Algunos registros de auditoría no se pudieron guardar ({count}). El registro está incompleto.",
     filterTool: "Filtrar por herramienta",

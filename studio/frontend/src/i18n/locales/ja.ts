@@ -2051,6 +2051,7 @@ export const ja = {
   toolAudit: {
     title: "ツールアクティビティ",
     empty: "まだツール呼び出しは記録されていません。",
+    loadError: "ツールアクティビティを読み込めませんでした。再試行してください。",
     degraded:
       "一部の監査記録の書き込みに失敗しました（{count}件）。ログは不完全です。",
     filterTool: "ツールで絞り込み",
