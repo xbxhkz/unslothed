@@ -221,3 +221,29 @@ def prune(*, max_age_days: int = 365, max_rows: int = 250_000) -> int:
             )
         conn.commit()
         return deleted
+
+
+_PRUNE_INTERVAL_SECONDS = 3600.0
+_last_prune = 0.0
+
+
+def reset_prune_clock_for_tests() -> None:
+    global _last_prune
+    _last_prune = 0.0
+
+
+def maybe_prune(*, max_age_days: int = 365, max_rows: int = 250_000) -> None:
+    """Prune at most once an hour per process.
+
+    Called from the read API rather than the write path: pruning is maintenance,
+    and a tool call should never wait on it.
+    """
+    global _last_prune
+    now = time.time()
+    if now - _last_prune < _PRUNE_INTERVAL_SECONDS:
+        return
+    _last_prune = now
+    try:
+        prune(max_age_days = max_age_days, max_rows = max_rows)
+    except BaseException:  # noqa: BLE001 - retention must never break a read
+        pass

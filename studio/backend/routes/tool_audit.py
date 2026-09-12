@@ -35,6 +35,7 @@ def list_entries(
     session_id: Optional[str] = None,
     current_subject: str = Depends(get_current_subject),
 ) -> dict:
+    tool_audit_db.maybe_prune()
     entries = tool_audit_db.query_entries(
         limit = limit,
         offset = offset,

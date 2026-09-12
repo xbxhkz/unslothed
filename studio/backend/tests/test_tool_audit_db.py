@@ -116,3 +116,13 @@ def test_prune_by_age():
     tool_audit_db.prune(max_age_days = 365)
     assert tool_audit_db.get_entry(old_id) is None
     assert tool_audit_db.get_entry(fresh_id) is not None
+
+
+def test_maybe_prune_runs_once_then_backs_off(monkeypatch):
+    """Pruning on every write would be wasteful; once per hour is enough."""
+    calls = []
+    monkeypatch.setattr(tool_audit_db, "prune", lambda **kw: calls.append(kw) or 0)
+    tool_audit_db.reset_prune_clock_for_tests()
+    tool_audit_db.maybe_prune()
+    tool_audit_db.maybe_prune()
+    assert len(calls) == 1, "maybe_prune must not prune twice inside the interval"
