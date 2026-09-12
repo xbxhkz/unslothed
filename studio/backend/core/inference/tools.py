@@ -10200,10 +10200,15 @@ def execute_tool(
 # and llama_cpp, which this fork does not edit) get the audited version
 # deterministically rather than by import order.
 #
-# functools.wraps is load-bearing: studio_tool_loop gates kwarg forwarding on
-# accepts_kwarg(execute_tool, ...), which uses inspect.signature, and that
-# follows __wrapped__. Without it the wrapper would report (*args, **kwargs) and
-# silently disable conversation-branch and budget forwarding.
+# functools.wraps is kept for introspection, tracebacks, and API documentation:
+# it makes the wrapper report execute_tool's real name, docstring, and signature
+# through inspect.signature instead of a bare (*args, **kwargs). It is NOT
+# required for kwarg forwarding -- accepts_kwarg (core/inference/
+# tool_stream_exec.py:35) already returns True for any callable that takes
+# **kwargs, so studio_tool_loop's conversation-branch and budget forwarding
+# works with or without this decorator. An earlier revision of this comment
+# claimed forwarding depended on it; that was disproven by removing the
+# decorator and observing accepts_kwarg still return True.
 _execute_tool_unaudited = execute_tool
 
 

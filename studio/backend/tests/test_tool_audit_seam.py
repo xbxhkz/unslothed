@@ -28,12 +28,17 @@ def test_execute_tool_is_wrapped_by_the_audit_shadow():
 
 
 def test_the_wrapper_preserves_the_original_signature():
-    """functools.wraps here is load-bearing, not decoration.
+    """functools.wraps keeps the original parameters visible through inspect.signature.
 
-    studio_tool_loop.py gates kwarg forwarding on accepts_kwarg(execute_tool, ...),
-    which uses inspect.signature -- and inspect.signature follows __wrapped__. A
-    bare wrapper would report (*args, **kwargs) and silently disable
-    conversation-branch and budget forwarding.
+    This is the live control for the decorator: remove @functools.wraps from the
+    shadow in tools.py and this test fails, because inspect.signature(execute_tool)
+    collapses to just (*args, **kwargs) and every named parameter -- including
+    "name" -- vanishes. Verified by hand: deleting the decorator makes this test
+    fail with exactly that assertion.
+
+    Note this is NOT about kwarg forwarding -- see
+    test_accepts_kwarg_still_sees_the_forwarded_kwargs's docstring for why
+    forwarding is unaffected either way.
     """
     params = inspect.signature(tools.execute_tool).parameters
     for expected in ("name", "arguments", "session_id", "thread_id",
@@ -42,7 +47,18 @@ def test_the_wrapper_preserves_the_original_signature():
 
 
 def test_accepts_kwarg_still_sees_the_forwarded_kwargs():
-    """The real consumer, not a proxy for it."""
+    """Corroborating only -- NOT a control for functools.wraps.
+
+    This asserts that forwarding works, but it passes with or without
+    @functools.wraps: accepts_kwarg (core/inference/tool_stream_exec.py:35)
+    returns True for any callable that takes **kwargs, and the shadow in
+    tools.py always does, decorator or not. Verified by hand: removing
+    @functools.wraps does not make this test fail.
+    functools.wraps is real -- for introspection, tracebacks, and API docs, see
+    the comment above the shadow in tools.py and
+    test_the_wrapper_preserves_the_original_signature -- it is just not what
+    this particular test is evidence of.
+    """
     from core.inference.tool_stream_exec import accepts_kwarg
 
     assert accepts_kwarg(tools.execute_tool, "conversation_branch") is True
