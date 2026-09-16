@@ -104,3 +104,13 @@ def test_resolve_all_returns_every_registered_tool():
     out = tr.resolve_all()
     assert set(out) == {"a", "b"}
     assert out["b"].state == "missing"
+
+
+def test_re_registering_invalidates_the_cached_reading():
+    """register() must not leave a stale cached reading from the probe it is
+    replacing -- otherwise a caller inside the TTL window would see the OLD
+    probe's result even though a new one now says the tool is ready."""
+    tr.register("t", lambda: tr.Readiness("missing", "old", None, None))
+    tr.resolve("t")
+    tr.register("t", lambda: tr.Readiness("ready", "new", None, None))
+    assert tr.resolve("t").detail == "new"

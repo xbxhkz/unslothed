@@ -98,7 +98,14 @@ def resolve(tool_name: str, *, refresh: bool = False) -> Readiness:
     except BaseException as exc:  # noqa: BLE001 - a probe must never break a caller
         result = Readiness(UNKNOWN, f"readiness check failed: {exc}")
     with _lock:
-        _cache[tool_name] = (now, result)
+        # A concurrent register() may have replaced the probe while we were
+        # running the old one outside the lock. Only cache this result if the
+        # probe we ran is still the one registered -- otherwise we'd silently
+        # overwrite a newer registration's future reading with a stale one,
+        # which would make register()'s "an explicit registration always wins"
+        # false under concurrency.
+        if _probes.get(tool_name) is probe:
+            _cache[tool_name] = (now, result)
     return result
 
 
