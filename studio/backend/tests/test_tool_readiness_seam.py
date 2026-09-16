@@ -85,4 +85,4 @@ def test_the_seam_stays_additive():
     assert stat, "no diff recorded for tools.py"
     insertions, deletions = int(stat[0]), int(stat[1])
     assert deletions == 0, f"tools.py lost {deletions} line(s); the seam must be additive"
-    assert insertions <= 90, f"seam grew to {insertions}; budget is ~84"
+    assert insertions <= 90, f"seam grew to {insertions}; budget is ~88"
