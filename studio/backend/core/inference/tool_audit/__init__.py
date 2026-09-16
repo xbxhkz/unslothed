@@ -105,6 +105,33 @@ def _split_result(text: str) -> tuple[str, str, int, str]:
     return safe[:RESULT_CAP_BYTES], safe[-RESULT_CAP_BYTES:], len(raw), digest
 
 
+def _enrich_failure(name: Any, result: Any) -> Any:
+    """Append one line when a FAILED call's dependency is missing.
+
+    Returned error strings only, never raised exceptions: enriching an exception
+    would mean raising a different one, changing its identity on a path that
+    works. The audit row already records the exception in full.
+
+    Guarded: a broken enricher must never cost the caller its result.
+    """
+    try:
+        if not isinstance(result, str) or not result.startswith("Error:"):
+            return result
+        from core.inference import tool_readiness
+        from core.inference.tool_readiness.probes import install_default_probes
+
+        install_default_probes()
+        r = tool_readiness.resolve(str(name))
+        if r.state != tool_readiness.MISSING:
+            return result
+        line = f"\n\n[readiness] {name} is missing: {r.missing or r.detail}"
+        if r.remedy:
+            line += f"\n            -> {r.remedy}"
+        return result + line
+    except BaseException:  # noqa: BLE001 - never-raises; see module docstring
+        return result
+
+
 def around(fn: Callable[..., str], *args: Any, **kwargs: Any) -> str:
     """Call ``fn`` and record the invocation. Returns ``fn``'s result unchanged."""
     row_id = None
@@ -142,7 +169,7 @@ def around(fn: Callable[..., str], *args: Any, **kwargs: Any) -> str:
         _finish(row_id, started, outcome = "error", result = "", error = exc, withhold = withhold)
         raise
     _finish(row_id, started, outcome = "ok", result = result, withhold = withhold)
-    return result
+    return _enrich_failure(args[0] if args else kwargs.get("name"), result)
 
 
 def _finish(
