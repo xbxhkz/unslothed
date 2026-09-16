@@ -20,13 +20,27 @@ import os
 
 from core.inference.tool_readiness import MISSING, READY, UNKNOWN, Readiness, register_default
 
-# No external dependency: if the process is running, these work.
+# No external dependency: if the process is running, these work. Verified against
+# each one's dispatch path in tools.execute_tool rather than assumed -- python
+# runs sys.executable (the interpreter already executing this), terminal runs the
+# platform shell, edit_file and render_html touch only the filesystem and a
+# string. None of the four has an availability gate; their early returns are all
+# per-argument validation, which readiness does not model.
+#
+# search_conversation was here and was WRONG: it is gated on
+# conversation_archive.enabled(), so with CONVERSATION_ARCHIVE off, or with
+# sqlite_vec's vec0 native library missing from a frozen build, this reported
+# "ready" for a tool that answers "Searching earlier conversation is unavailable
+# on this server." It has its own probe below.
 ALWAYS_READY_TOOLS = frozenset({
     "terminal",
     "python",
     "edit_file",
     "render_html",
-    "search_conversation",
+    # Self-evident rather than unchecked: this is the tool producing the report,
+    # so if the row is being rendered at all, it works. Leaving it unprobed would
+    # make the full report say "unknown -- nobody checked" about the checker.
+    "check_tool_readiness",
 })
 
 _CODE_TOOL_NAMES = (
@@ -51,6 +65,29 @@ def _face_swap_licence_accepted() -> bool:
     from core.inference.assist_vision.face_swap import licence_accepted
 
     return bool(licence_accepted())
+
+
+def _face_swap_models_present() -> bool:
+    """Delegates to face_swap.models_present(), which owns the filenames and the
+    root convention. The licence marker says the user agreed to let InsightFace
+    download ~300 MB; it does not say the download happened."""
+    from core.inference.assist_vision.face_swap import models_present
+
+    return bool(models_present())
+
+
+def _conversation_archive_enabled() -> bool:
+    """Delegates to the archive's own gate rather than re-deriving it.
+
+    enabled() is `config.CONVERSATION_ARCHIVE and rag_db.rag_available()`, and
+    rag_available() is deliberately not the RAG_AVAILABLE flag: the flag only
+    records that `import sqlite_vec` worked, while the vec0 native library is a
+    separate file a venv (or a frozen build) can be missing. Reimplementing the
+    two halves here is exactly the drift this package's docstring warns about, so
+    the helper is called instead. Imported lazily, as the tool itself does."""
+    from core.rag import conversation_archive
+
+    return bool(conversation_archive.enabled())
 
 
 def _module_present(name: str) -> bool:
@@ -87,8 +124,21 @@ def _probe_unknown_kb() -> Readiness:
 
 
 def _probe_webcam_look() -> Readiness:
+    # The package check comes first: a frozen build missing a lazily-imported
+    # module is this project's most common defect class, and "the weight is
+    # cached" is a useless answer when the code that loads it cannot import.
+    # _do_webcam_look reaches both -- webcam.capture_frame_jpeg imports cv2,
+    # yolo.detect imports ultralytics.
+    absent = [name for name in ("ultralytics", "cv2") if not _module_present(name)]
+    if absent:
+        return Readiness(
+            MISSING,
+            f"{', '.join(absent)} not importable in this build",
+            missing = ", ".join(absent),
+            remedy = "pip install ultralytics opencv-python (or declare them in the frozen build)",
+        )
     if _yolo_weight_present():
-        return Readiness(READY, "yolov8n.pt present")
+        return Readiness(READY, "yolov8n.pt present; ultralytics and cv2 importable")
     return Readiness(
         MISSING,
         "yolov8n.pt not in the model cache",
@@ -98,13 +148,55 @@ def _probe_webcam_look() -> Readiness:
 
 
 def _probe_face_swap() -> Readiness:
-    if _face_swap_licence_accepted():
-        return Readiness(READY, "InsightFace licence accepted")
+    # Licence first, and deliberately: an unaccepted licence is a different and
+    # far more actionable "missing" than absent files, because nothing can be
+    # downloaded until the user accepts, and accepting is a thing they can do.
+    if not _face_swap_licence_accepted():
+        return Readiness(
+            MISSING,
+            "InsightFace licence not accepted, so its models cannot be downloaded",
+            missing = "InsightFace model licence acceptance",
+            remedy = "accept the InsightFace licence before using face swap",
+        )
+    if not _module_present("insightface"):
+        return Readiness(
+            MISSING,
+            "licence accepted, but the insightface package is not importable in this build",
+            missing = "insightface",
+            remedy = "pip install insightface (or declare it in the frozen build)",
+        )
+    # The licence marker is written by an explicit user action and downloads
+    # nothing. Answering "ready" on it alone told the model a ~300 MB pack was
+    # present when the cache could be empty -- and contradicted webcam_look,
+    # which calls the identical situation "missing".
+    if not _face_swap_models_present():
+        return Readiness(
+            MISSING,
+            "InsightFace models not downloaded",
+            missing = "buffalo_l and/or inswapper_128.onnx",
+            remedy = (
+                "InsightFace fetches them (~300 MB) on first use, now that the "
+                "licence is accepted"
+            ),
+        )
+    return Readiness(
+        READY, "InsightFace licence accepted, models downloaded, package importable"
+    )
+
+
+def _probe_search_conversation() -> Readiness:
+    if _conversation_archive_enabled():
+        return Readiness(
+            READY, "the conversation archive is enabled and its vector store is usable"
+        )
     return Readiness(
         MISSING,
-        "InsightFace licence not accepted, so its models cannot be downloaded",
-        missing = "InsightFace model licence acceptance",
-        remedy = "accept the InsightFace licence before using face swap",
+        "the conversation archive is disabled, or its sqlite_vec vec0 library is not loadable",
+        missing = "an enabled conversation archive with a working vector store",
+        remedy = (
+            "enable the conversation archive in settings, and make sure sqlite_vec's "
+            "vec0 native library ships with this build"
+        ),
     )
 
 
@@ -144,6 +236,7 @@ def install_default_probes() -> None:
     for name in ALWAYS_READY_TOOLS:
         register_default(name, _probe_always_ready)
     register_default("search_knowledge_base", _probe_unknown_kb)
+    register_default("search_conversation", _probe_search_conversation)
     register_default("web_search", _probe_web_search)
     register_default("webcam_look", _probe_webcam_look)
     register_default("face_swap", _probe_face_swap)

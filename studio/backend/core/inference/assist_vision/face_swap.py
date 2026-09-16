@@ -62,6 +62,39 @@ def licence_accepted():
     return os.path.isfile(_licence_marker_path())
 
 
+def _insightface_models_dir():
+    """Where InsightFace puts what it downloads under ``root=_model_root()``.
+
+    Both call sites below pass ``root = _model_root()``, and InsightFace joins a
+    ``models`` sub_dir onto it before the pack name or the onnx filename --
+    ``utils/storage.py``'s ``download()``/``download_onnx()`` do
+    ``os.path.join(expanduser(root), sub_dir, name)``, and
+    ``model_zoo.get_model`` does the same. That one join is the only thing here
+    not already named by this module; the pack and file names come from the
+    constants above rather than being written out a second time.
+    """
+    return os.path.join(os.path.expanduser(_model_root()), "models")
+
+
+def models_present():
+    """True when both InsightFace models are already on disk.
+
+    ``licence_accepted()`` says only that the user agreed to let the downloader
+    run -- it writes a marker, not ~300 MB of weights. Asking that question
+    instead of this one is how a readiness check came to answer "ready" for an
+    install that had never downloaded anything.
+
+    Deliberately cheap: two stat calls, no import of insightface, no network.
+    The pack is a DIRECTORY that the zip is extracted into; the swap model is a
+    single file.
+    """
+    root = _insightface_models_dir()
+    return (
+        os.path.isdir(os.path.join(root, _MODEL_PACK_NAME))
+        and os.path.isfile(os.path.join(root, _SWAP_MODEL_FILENAME))
+    )
+
+
 def record_licence_acceptance():
     """Record explicit acceptance. Called only from an explicit user action."""
     os.makedirs(_model_root(), exist_ok=True)

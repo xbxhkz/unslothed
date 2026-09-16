@@ -3660,10 +3660,20 @@ async def _select_request_tools(
     #
     # Sub-project 2 adds the code-intelligence tools to the same re-add rather
     # than a second hunk: one place to reason about, one merge conflict to
-    # resolve instead of two.
+    # resolve instead of two. Sub-project 6 adds check_tool_readiness for the
+    # third time for the same reason -- it has no pill either, so the filter
+    # above stripped it from every Studio chat and the model received 16 schemas
+    # with the readiness tool absent: the feature was unreachable in the product
+    # while every unit test passed. It is read-only, takes no path, spawns no
+    # process and reaches no network, so unlike the webcam and deepfake tools
+    # above it carries none of the risk the gate paragraph worries about.
     if tools_on and tools:
-        from core.inference.tools import ASSIST_VISION_TOOL_NAMES, ASSIST_CODE_TOOL_NAMES
-        _addable = ASSIST_VISION_TOOL_NAMES | ASSIST_CODE_TOOL_NAMES
+        from core.inference.tools import (
+            ASSIST_VISION_TOOL_NAMES,
+            ASSIST_CODE_TOOL_NAMES,
+            READINESS_TOOL_NAMES,
+        )
+        _addable = ASSIST_VISION_TOOL_NAMES | ASSIST_CODE_TOOL_NAMES | READINESS_TOOL_NAMES
         _already = {t["function"]["name"] for t in tools}
         tools = tools + [
             t for t in ALL_TOOLS
@@ -20023,6 +20033,20 @@ _STUDIO_ANTHROPIC_TOOL_ALIASES = {
 # and this channel invokes the loop without confirm; auto/ask reject, off/full run.
 _ANTHROPIC_UNPROMPTED_SAFE_TOOLS = frozenset(
     {"web_search", "search_knowledge_base", "search_conversation"}
+)
+
+# fork: additive rebind rather than editing the frozenset literal above, which
+# would be a DELETION against upstream. check_tool_readiness belongs here for the
+# same reason it is in tools._ALWAYS_SAFE_TOOLS: it only reads a marker file, a
+# PATH entry and importlib metadata, so it can never need the confirmation prompt
+# this channel has no way to present. Without it a Messages client that names the
+# tool explicitly is rejected outright under the default ("auto") permission mode.
+# Its one reader is the genexp at _gated_tool_selected_pre, which loads this name
+# as a module global at CALL time (LOAD_GLOBAL) -- so the rebind is seen. Verified
+# by executing that genexp's own code object against this module's globals, not by
+# reading it: see test_readiness_is_unprompted_on_the_anthropic_channel.
+_ANTHROPIC_UNPROMPTED_SAFE_TOOLS = _ANTHROPIC_UNPROMPTED_SAFE_TOOLS | frozenset(
+    {"check_tool_readiness"}
 )
 
 

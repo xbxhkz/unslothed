@@ -110,7 +110,29 @@ def resolve(tool_name: str, *, refresh: bool = False) -> Readiness:
 
 
 def resolve_all(*, refresh: bool = False) -> dict[str, Readiness]:
+    """Every tool that HAS a probe. Deliberately still registry-scoped.
+
+    The full-catalogue view lives in execute() instead, because the catalogue is
+    tools.ALL_TOOLS and this module must not depend on it: tools.py imports the
+    readiness schemas at module level, so a module-level import back would be
+    circular, and a registry that knows about the tool catalogue is no longer a
+    registry. execute() is the seam that already knows about both.
+    """
     return {name: resolve(name, refresh = refresh) for name in registered_names()}
+
+
+def _all_tool_names() -> list[str]:
+    """Every real tool name, for the no-argument report. Never raises.
+
+    Lazy import: tools.py imports tool_readiness.schemas at module level, so
+    importing it at module level here would be a cycle.
+    """
+    try:
+        from core.inference.tools import ALL_TOOLS
+
+        return [t["function"]["name"] for t in ALL_TOOLS]
+    except BaseException:  # noqa: BLE001 - a readiness query must never break a turn
+        return []
 
 
 def _format(name: str, r: Readiness) -> str:
@@ -129,7 +151,15 @@ def execute(name: str, arguments: dict) -> str:
         requested = (arguments or {}).get("tool")
         if requested:
             return _format(str(requested), resolve(str(requested)))
+        # Every real tool, not only the probed ones. A tool that is simply ABSENT
+        # from this table reads as nothing at all; the three-state contract says
+        # an unprobed tool must appear, saying "unknown". Reporting 14 rows for 18
+        # tools quietly hid detect_shapes, edit_image_prompt and remove_background
+        # from the only view the model has of what it can rely on.
         rows = resolve_all()
+        for name in _all_tool_names():
+            if name not in rows:
+                rows[name] = resolve(name)
         if not rows:
             return "No readiness checks are registered."
         return "\n".join(_format(n, rows[n]) for n in sorted(rows))
