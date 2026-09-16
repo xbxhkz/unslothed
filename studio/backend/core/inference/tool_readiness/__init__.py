@@ -111,3 +111,27 @@ def resolve(tool_name: str, *, refresh: bool = False) -> Readiness:
 
 def resolve_all(*, refresh: bool = False) -> dict[str, Readiness]:
     return {name: resolve(name, refresh = refresh) for name in registered_names()}
+
+
+def _format(name: str, r: Readiness) -> str:
+    line = f"{name:<24} {r.state:<9} {r.detail}"
+    if r.remedy:
+        line += f"\n{'':<34}-> {r.remedy}"
+    return line
+
+
+def execute(name: str, arguments: dict) -> str:
+    """Handler for the check_tool_readiness tool. Never raises."""
+    try:
+        from core.inference.tool_readiness.probes import install_default_probes
+
+        install_default_probes()
+        requested = (arguments or {}).get("tool")
+        if requested:
+            return _format(str(requested), resolve(str(requested)))
+        rows = resolve_all()
+        if not rows:
+            return "No readiness checks are registered."
+        return "\n".join(_format(n, rows[n]) for n in sorted(rows))
+    except BaseException as exc:  # noqa: BLE001 - a readiness query must never break a turn
+        return f"Readiness check unavailable: {exc}"

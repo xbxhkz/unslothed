@@ -4534,6 +4534,12 @@ def _render_html_reaches_network(arguments: dict) -> bool:
 # prompt for approval on every call.
 _ALWAYS_SAFE_TOOLS = frozenset({"web_search", "search_knowledge_base", "search_conversation"})
 
+# fork: additive rebind rather than editing the frozenset literal above, which
+# would be a DELETION. All three readers (below, _is_potentially_unsafe, and
+# is_high_risk_tool_call) look this name up as a module global at CALL time, so
+# the rebind is seen -- verified by running it, not assumed.
+_ALWAYS_SAFE_TOOLS = _ALWAYS_SAFE_TOOLS | frozenset({"check_tool_readiness"})
+
 
 def is_always_safe_tool(name: str) -> bool:
     """True for tools that never need an auto-mode prompt on any arguments, so a
@@ -9833,6 +9839,7 @@ SEARCH_CONVERSATION_TOOL = {
 
 from core.inference.assist_vision import ASSIST_VISION_TOOLS, ASSIST_VISION_TOOL_NAMES
 from core.inference.assist_code import ASSIST_CODE_TOOLS, ASSIST_CODE_TOOL_NAMES
+from core.inference.tool_readiness.schemas import READINESS_TOOLS, READINESS_TOOL_NAMES
 
 ALL_TOOLS = [
     WEB_SEARCH_TOOL,
@@ -9844,6 +9851,7 @@ ALL_TOOLS = [
     SEARCH_CONVERSATION_TOOL,
     *ASSIST_VISION_TOOLS,
     *ASSIST_CODE_TOOLS,
+    *READINESS_TOOLS,
 ]
 
 
@@ -10074,6 +10082,9 @@ def execute_tool(
             name, arguments, session_id = session_id,
             timeout = effective_timeout, cancel_event = cancel_event,
         )
+    if name in READINESS_TOOL_NAMES:
+        from core.inference import tool_readiness
+        return tool_readiness.execute(name, arguments)
     if name == "search_knowledge_base":
         return _search_knowledge_base_with_budget(
             arguments,
