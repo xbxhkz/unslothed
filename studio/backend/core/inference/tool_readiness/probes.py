@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import sys
+from typing import Optional
 
 from core.inference.tool_readiness import MISSING, READY, UNKNOWN, Readiness, register_default
 
@@ -50,6 +52,10 @@ _CODE_TOOL_NAMES = (
     "code_symbols",
     "code_diagnostics",
 )
+
+# Pinned: reading MaskRCNN_ResNet50_FPN_Weights.DEFAULT.url at runtime imports
+# torchvision's detection stack. A test asserts it still matches torchvision.
+_MASKRCNN_WEIGHT = "maskrcnn_resnet50_fpn_coco-bf2d0c1e.pth"
 
 
 def _yolo_weight_present() -> bool:
@@ -110,6 +116,51 @@ def _language_servers() -> dict[str, bool]:
         spec = servers._SERVERS.get(language)
         out[language] = bool(spec and servers._which(spec["binary"]))
     return out
+
+
+def _bg_removal_weight_present() -> bool:
+    """Delegates to bg_removal._model_path(), which owns the override env var and
+    the shared model cache root."""
+    from core.inference.assist_vision import bg_removal
+
+    return os.path.isfile(bg_removal._model_path())
+
+
+def _torch_hub_dir() -> Optional[str]:
+    """torch.hub.get_dir() -- but only from a torch that is ALREADY imported. The
+    running backend imports torch at startup; importing it here would cost
+    seconds and break the cheap-probe contract."""
+    torch = sys.modules.get("torch")
+    if torch is None:
+        return None
+    hub = getattr(torch, "hub", None)
+    return hub.get_dir() if hub is not None else None
+
+
+def _maskrcnn_weight_present() -> Optional[bool]:
+    """None when the cache location cannot be known without importing torch."""
+    hub_dir = _torch_hub_dir()
+    if hub_dir is None:
+        return None
+    return os.path.isfile(os.path.join(hub_dir, "checkpoints", _MASKRCNN_WEIGHT))
+
+
+def _diffusion_state() -> str:
+    """'unknown' | 'sd_cpp' | 'not_loaded' | 'loaded', read from modules already
+    in memory. Never get_active_diffusion_engine() / get_diffusion_backend():
+    both construct the engine they return."""
+    router = sys.modules.get("core.inference.diffusion_engine_router")
+    if router is None:
+        return "unknown"
+    if getattr(router, "_active_engine_name", None) == getattr(router, "ENGINE_SD_CPP", "sd_cpp"):
+        return "sd_cpp"
+    diffusion = sys.modules.get("core.inference.diffusion")
+    if diffusion is None:
+        return "unknown"
+    backend = getattr(diffusion, "_diffusion_backend", None)
+    if backend is None or not backend.is_loaded:
+        return "not_loaded"
+    return "loaded"
 
 
 def _probe_always_ready() -> Readiness:
@@ -211,6 +262,73 @@ def _probe_web_search() -> Readiness:
     )
 
 
+def _probe_remove_background() -> Readiness:
+    if not _module_present("onnxruntime"):
+        return Readiness(
+            MISSING,
+            "onnxruntime not importable in this build",
+            missing = "onnxruntime",
+            remedy = "pip install onnxruntime (or declare it in the frozen build)",
+        )
+    if _bg_removal_weight_present():
+        return Readiness(READY, "u2net.onnx present; onnxruntime importable")
+    return Readiness(
+        MISSING,
+        "u2net.onnx not in the model cache",
+        missing = "u2net.onnx",
+        remedy = "it is downloaded on first use",
+    )
+
+
+def _probe_detect_shapes() -> Readiness:
+    absent = [name for name in ("torch", "torchvision") if not _module_present(name)]
+    if absent:
+        return Readiness(
+            MISSING,
+            f"{', '.join(absent)} not importable in this build",
+            missing = ", ".join(absent),
+            remedy = "pip install torch torchvision (or declare them in the frozen build)",
+        )
+    present = _maskrcnn_weight_present()
+    if present is None:
+        return Readiness(
+            UNKNOWN,
+            "torch and torchvision importable; the weight cache cannot be located without loading torch",
+        )
+    if present:
+        return Readiness(READY, "Mask R-CNN weights present; torch and torchvision importable")
+    return Readiness(
+        MISSING,
+        "Mask R-CNN weights not downloaded",
+        missing = _MASKRCNN_WEIGHT,
+        remedy = "torchvision downloads them (~170 MB) on first use",
+    )
+
+
+def _probe_edit_image_prompt() -> Readiness:
+    state = _diffusion_state()
+    if state == "sd_cpp":
+        return Readiness(
+            MISSING,
+            "the native sd.cpp engine is active, and it does not support image-to-image",
+            missing = "an image model on the diffusers engine",
+            remedy = "load the image model in Studio on the diffusers engine",
+        )
+    if state == "not_loaded":
+        return Readiness(
+            MISSING,
+            "no image model loaded in Studio",
+            missing = "a loaded image model",
+            remedy = "load an image model in Studio",
+        )
+    if state == "loaded":
+        return Readiness(READY, "an image model is loaded on the diffusers engine")
+    return Readiness(
+        UNKNOWN,
+        "image generation has not been used this session, so no engine is in memory to check",
+    )
+
+
 def _probe_code_tool() -> Readiness:
     servers = _language_servers()
     have = [lang for lang, ok in servers.items() if ok]
@@ -240,5 +358,8 @@ def install_default_probes() -> None:
     register_default("web_search", _probe_web_search)
     register_default("webcam_look", _probe_webcam_look)
     register_default("face_swap", _probe_face_swap)
+    register_default("remove_background", _probe_remove_background)
+    register_default("detect_shapes", _probe_detect_shapes)
+    register_default("edit_image_prompt", _probe_edit_image_prompt)
     for name in _CODE_TOOL_NAMES:
         register_default(name, _probe_code_tool)
