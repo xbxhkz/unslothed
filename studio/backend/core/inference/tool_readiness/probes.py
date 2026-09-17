@@ -18,7 +18,6 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
-from typing import Optional
 
 from core.inference.tool_readiness import MISSING, READY, UNKNOWN, Readiness, register_default
 
@@ -126,23 +125,16 @@ def _bg_removal_weight_present() -> bool:
     return os.path.isfile(bg_removal._model_path())
 
 
-def _torch_hub_dir() -> Optional[str]:
-    """torch.hub.get_dir() -- but only from a torch that is ALREADY imported. The
-    running backend imports torch at startup; importing it here would cost
-    seconds and break the cheap-probe contract."""
-    torch = sys.modules.get("torch")
-    if torch is None:
-        return None
-    hub = getattr(torch, "hub", None)
-    return hub.get_dir() if hub is not None else None
+def _maskrcnn_weight_present() -> bool:
+    """Delegates to assist_vision.models.model_root(), which owns the vision
+    model cache root. shape_detect._get_model() redirects torch's hub dir
+    there with torch.hub.set_dir(model_root()) before downloading, so that is
+    where the weight actually lands -- not torch's default ~/.cache/torch/hub.
+    model_root() is a plain os/env function with no torch dependency, so this
+    needs no already-imported torch and has no unknown state."""
+    from core.inference.assist_vision.models import model_root
 
-
-def _maskrcnn_weight_present() -> Optional[bool]:
-    """None when the cache location cannot be known without importing torch."""
-    hub_dir = _torch_hub_dir()
-    if hub_dir is None:
-        return None
-    return os.path.isfile(os.path.join(hub_dir, "checkpoints", _MASKRCNN_WEIGHT))
+    return os.path.isfile(os.path.join(model_root(), "checkpoints", _MASKRCNN_WEIGHT))
 
 
 def _diffusion_state() -> str:
@@ -290,11 +282,6 @@ def _probe_detect_shapes() -> Readiness:
             remedy = "pip install torch torchvision (or declare them in the frozen build)",
         )
     present = _maskrcnn_weight_present()
-    if present is None:
-        return Readiness(
-            UNKNOWN,
-            "torch and torchvision importable; the weight cache cannot be located without loading torch",
-        )
     if present:
         return Readiness(READY, "Mask R-CNN weights present; torch and torchvision importable")
     return Readiness(

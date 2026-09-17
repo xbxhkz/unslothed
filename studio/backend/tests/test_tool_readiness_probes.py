@@ -310,12 +310,6 @@ def test_detect_shapes_missing_without_torch_or_torchvision(monkeypatch):
         assert r.missing == absent
 
 
-def test_detect_shapes_unknown_when_the_weight_location_is_unknown(monkeypatch):
-    monkeypatch.setattr(probes, "_module_present", lambda name: True)
-    monkeypatch.setattr(probes, "_maskrcnn_weight_present", lambda: None)
-    assert tr.resolve("detect_shapes", refresh = True).state == tr.UNKNOWN
-
-
 def test_detect_shapes_missing_without_its_weight(monkeypatch):
     monkeypatch.setattr(probes, "_module_present", lambda name: True)
     monkeypatch.setattr(probes, "_maskrcnn_weight_present", lambda: False)
@@ -325,29 +319,26 @@ def test_detect_shapes_missing_without_its_weight(monkeypatch):
 
 
 def test_detect_shapes_ready_with_packages_and_weight(monkeypatch):
-    """Control for the three tests above."""
+    """Control for the two tests above."""
     monkeypatch.setattr(probes, "_module_present", lambda name: True)
     monkeypatch.setattr(probes, "_maskrcnn_weight_present", lambda: True)
     assert tr.resolve("detect_shapes", refresh = True).state == tr.READY
 
 
-def test_the_torch_hub_dir_is_read_only_from_an_already_imported_torch(tmp_path, monkeypatch):
-    fake_torch = types.ModuleType("torch")
-    fake_torch.hub = types.SimpleNamespace(get_dir = lambda: str(tmp_path))
-    monkeypatch.setitem(sys.modules, "torch", fake_torch)
-    assert probes._torch_hub_dir() == str(tmp_path)
+def test_the_maskrcnn_weight_check_delegates_to_the_vision_model_root(tmp_path, monkeypatch):
+    """shape_detect._get_model() redirects torch's hub dir to model_root() with
+    torch.hub.set_dir() before downloading, so that -- not torch's default
+    ~/.cache/torch/hub -- is where the weight actually lands. Patching the
+    owner module (models.model_root), not the probe, proves the delegation
+    rather than a copy of it."""
+    from core.inference.assist_vision import models
+
+    monkeypatch.setattr(models, "model_root", lambda: str(tmp_path))
+    assert probes._maskrcnn_weight_present() is False
     checkpoints = tmp_path / "checkpoints"
     checkpoints.mkdir()
-    assert probes._maskrcnn_weight_present() is False
     (checkpoints / probes._MASKRCNN_WEIGHT).write_bytes(b"x")
     assert probes._maskrcnn_weight_present() is True
-
-
-def test_no_torch_in_memory_means_the_weight_location_is_unknown(monkeypatch):
-    # None in sys.modules reads as "not imported" without evicting the real torch.
-    monkeypatch.setitem(sys.modules, "torch", None)
-    assert probes._torch_hub_dir() is None
-    assert probes._maskrcnn_weight_present() is None
 
 
 def test_the_pinned_maskrcnn_filename_matches_torchvision():
