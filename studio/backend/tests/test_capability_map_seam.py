@@ -21,10 +21,47 @@ from core.inference import tool_audit
 from core.inference import tool_readiness as tr
 from core.inference import tools
 from storage import tool_audit_db
-from tests.test_tool_readiness_seam import _anthropic_gate_genexp
 
 _ROUTE_FILE = Path(tools.__file__).parents[2] / "routes" / "inference.py"
 _STUDIO_ALLOWLIST = ["web_search", "python", "terminal", "edit_file"]
+
+
+# Duplicated deliberately, not imported from tests/test_tool_readiness_seam.py:
+# these test files cannot import each other under the repo's normal pytest
+# invocation. studio/__init__.py and studio/backend/__init__.py make every file
+# under studio/backend/tests/ resolve to the dotted name studio.backend.tests.*,
+# so a bare `import tests` resolves to the unrelated top-level tests package at
+# the repo root instead of this directory, and `from tests.test_tool_readiness_seam
+# import ...` raises ModuleNotFoundError under `python -m pytest`.
+def _anthropic_gate_genexp(inf):
+    """The code object of the `_gated_tool_selected_pre` generator expression,
+    pulled out of routes/inference.py's own compiled bytecode.
+
+    Running THIS is the point. The rebind of _ANTHROPIC_UNPROMPTED_SAFE_TOOLS is
+    only additive-safe if every reader looks the name up as a module global at
+    call time; a reader that captured it early would leave the rebind inert, and
+    asserting `"check_tool_readiness" in inf._ANTHROPIC_UNPROMPTED_SAFE_TOOLS`
+    would still pass while the gate rejected the request. So the real reader is
+    executed instead of inspected.
+    """
+    import types
+
+    def walk(code):
+        for const in code.co_consts:
+            if not isinstance(const, types.CodeType):
+                continue
+            if const.co_name == "<genexpr>" and any(
+                ins == "_ANTHROPIC_UNPROMPTED_SAFE_TOOLS" for ins in const.co_names
+            ):
+                return const
+            found = walk(const)
+            if found is not None:
+                return found
+        return None
+
+    genexp = walk(inf.anthropic_messages.__code__)
+    assert genexp is not None, "could not locate the gate genexp; the route changed shape"
+    return genexp
 
 
 @pytest.fixture(autouse = True)
