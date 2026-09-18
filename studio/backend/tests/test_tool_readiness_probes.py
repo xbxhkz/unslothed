@@ -29,7 +29,7 @@ def _clean():
 
 
 def test_trivially_ready_tools_are_ready():
-    for name in ("terminal", "python", "edit_file", "render_html", "check_tool_readiness"):
+    for name in ("terminal", "python", "edit_file", "render_html", "check_tool_readiness", "find_capability"):
         assert tr.resolve(name).state == tr.READY, name
 
 

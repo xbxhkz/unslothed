@@ -3672,8 +3672,9 @@ async def _select_request_tools(
             ASSIST_VISION_TOOL_NAMES,
             ASSIST_CODE_TOOL_NAMES,
             READINESS_TOOL_NAMES,
+            CAPABILITY_TOOL_NAMES,
         )
-        _addable = ASSIST_VISION_TOOL_NAMES | ASSIST_CODE_TOOL_NAMES | READINESS_TOOL_NAMES
+        _addable = ASSIST_VISION_TOOL_NAMES | ASSIST_CODE_TOOL_NAMES | READINESS_TOOL_NAMES | CAPABILITY_TOOL_NAMES
         _already = {t["function"]["name"] for t in tools}
         tools = tools + [
             t for t in ALL_TOOLS
@@ -20046,7 +20047,7 @@ _ANTHROPIC_UNPROMPTED_SAFE_TOOLS = frozenset(
 # by executing that genexp's own code object against this module's globals, not by
 # reading it: see test_readiness_is_unprompted_on_the_anthropic_channel.
 _ANTHROPIC_UNPROMPTED_SAFE_TOOLS = _ANTHROPIC_UNPROMPTED_SAFE_TOOLS | frozenset(
-    {"check_tool_readiness"}
+    {"check_tool_readiness", "find_capability"}
 )
 
 

@@ -42,6 +42,9 @@ ALWAYS_READY_TOOLS = frozenset({
     # so if the row is being rendered at all, it works. Leaving it unprobed would
     # make the full report say "unknown -- nobody checked" about the checker.
     "check_tool_readiness",
+    # Same reason: it is a discovery tool reading the same probes. Without this,
+    # the full readiness report would call it "unknown -- nobody checked".
+    "find_capability",
 })
 
 _CODE_TOOL_NAMES = (
