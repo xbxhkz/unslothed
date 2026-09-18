@@ -127,3 +127,81 @@ def resolve_capability(capability: Capability) -> CapabilityResult:
     if all(result.state == MISSING for result in results):
         return CapabilityResult(capability, MISSING, None, results)
     return CapabilityResult(capability, UNKNOWN, None, results)
+
+
+_MCP_NOTE = "MCP tools are not in this map; their descriptions are in your tool list."
+
+_ORDER = {READY: 0, UNKNOWN: 1, MISSING: 2}
+
+
+def _label(result: ProviderResult) -> str:
+    """Tool providers are phrased 'via tool X' so the model can match them against
+    the tools actually offered in THIS request, which this code cannot see."""
+    provider = result.provider
+    if provider.kind == "software":
+        return f"{provider.name} via {provider.via}"
+    if provider.kind == "tool":
+        tools = [r.name for r in provider.requires if r.kind == "tool"]
+        if len(tools) == 1:
+            return f"via tool {tools[0]}"
+        return f"{provider.name} (via tools {', '.join(tools)})"
+    return provider.name
+
+
+def format_capability(result: CapabilityResult) -> str:
+    capability = result.capability
+    lines = [
+        f"CAPABILITY: {capability.name} — {capability.title}",
+        f"Status:      {result.state}",
+    ]
+    if result.best is not None:
+        lines.append(f"Best option: {_label(result.best)} ({result.best.detail})")
+        lines.append(f"Reason:      {result.best.provider.reason}")
+    elif result.state == MISSING and capability.acquire:
+        lines.append(f"To get it:   {capability.acquire}")
+    if result.providers:
+        lines.append("Providers:")
+        for index, provider in enumerate(result.providers, 1):
+            lines.append(f"  {index}. {_label(provider):<34} {provider.state:<8} {provider.detail}")
+    else:
+        lines.append("Providers:   none yet")
+    return "\n".join(lines)
+
+
+def format_map(results: Sequence[CapabilityResult]) -> str:
+    ranked = sorted(enumerate(results), key = lambda pair: (_ORDER.get(pair[1].state, 1), pair[0]))
+    lines = ["Capability map -- call find_capability with a capability for its providers and reasons:"]
+    for _index, result in ranked:
+        capability = result.capability
+        line = f"  {capability.name:<20} {result.state:<8} {capability.title}"
+        if result.best is not None:
+            line += f" -- best: {_label(result.best)}"
+        lines.append(line)
+        if result.state == MISSING and capability.acquire:
+            lines.append(f"  {'':<29}-> {capability.acquire}")
+    lines.append(_MCP_NOTE)
+    return "\n".join(lines)
+
+
+def format_unmatched(query: str, capabilities: Sequence[Capability]) -> str:
+    lines = [f"No capability matches {query!r}. Known capabilities:"]
+    lines.extend(f"  {c.name:<20} {c.title}" for c in capabilities)
+    return "\n".join(lines)
+
+
+def execute(name: str, arguments) -> str:
+    """Handler for the find_capability tool. Never raises."""
+    try:
+        from core.inference.capability_map.vocabulary import CAPABILITIES
+
+        args = arguments if isinstance(arguments, dict) else {}
+        requested = args.get("capability")
+        if requested is None or (isinstance(requested, str) and not requested.strip()):
+            return format_map([resolve_capability(c) for c in CAPABILITIES])
+        query = requested if isinstance(requested, str) else str(requested)
+        capability = find(query, CAPABILITIES)
+        if capability is None:
+            return format_unmatched(query, CAPABILITIES)
+        return format_capability(resolve_capability(capability))
+    except BaseException as exc:  # noqa: BLE001 - a capability query must never break a turn
+        return f"Capability map unavailable: {exc}"
