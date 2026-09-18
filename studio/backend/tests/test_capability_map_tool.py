@@ -52,6 +52,14 @@ def test_one_capability_renders_in_the_master_spec_format(monkeypatch):
     assert "  2. Tesseract via terminal" in out
 
 
+def test_a_tool_provider_renders_as_via_tool_name(monkeypatch):
+    """Load-bearing for finding 1's mitigation: the model matches "via tool X"
+    against its own tool list, so the exact phrasing must not drift."""
+    _by_requirement(monkeypatch, {}, READY)
+    out = cm.execute("find_capability", {"capability": "run_python"})
+    assert "via tool python" in out
+
+
 def test_the_best_option_skips_an_unknown_first_provider(monkeypatch):
     _by_requirement(
         monkeypatch,

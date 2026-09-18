@@ -110,7 +110,6 @@ CAPABILITIES: tuple[Capability, ...] = (
         ("describe image", "describe an image", "what is in this image", "image question", "vision"),
         (
             _vision("answers open questions about what an image shows"),
-            _tool("detect_shapes", "labels the objects it finds, and nothing more"),
         ),
         "Load a vision-capable model.",
     ),

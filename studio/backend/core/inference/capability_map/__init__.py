@@ -115,6 +115,10 @@ def resolve_provider(provider: Provider) -> ProviderResult:
         if readiness.state != READY:
             return ProviderResult(provider, UNKNOWN, readiness.detail)
     own = [readiness.detail for req, readiness in checked if req in provider.requires]
+    # Several requirements can share one readiness probe (e.g. code_intelligence's
+    # five tool requirements all resolve through the same check), which would
+    # otherwise repeat the identical detail sentence once per requirement.
+    own = list(dict.fromkeys(own))
     return ProviderResult(provider, READY, "; ".join(own) if own else checked[-1][1].detail)
 
 
@@ -130,6 +134,11 @@ def resolve_capability(capability: Capability) -> CapabilityResult:
 
 
 _MCP_NOTE = "MCP tools are not in this map; their descriptions are in your tool list."
+
+_TOOL_SCOPE_NOTE = (
+    "A provider phrased \"via tool X\" is only usable if tool X is in your tool list "
+    "for this turn -- this map cannot see which tools any given turn offers."
+)
 
 _ORDER = {READY: 0, UNKNOWN: 1, MISSING: 2}
 
@@ -165,6 +174,8 @@ def format_capability(result: CapabilityResult) -> str:
             lines.append(f"  {index}. {_label(provider):<34} {provider.state:<8} {provider.detail}")
     else:
         lines.append("Providers:   none yet")
+    lines.append(_MCP_NOTE)
+    lines.append(_TOOL_SCOPE_NOTE)
     return "\n".join(lines)
 
 
@@ -180,6 +191,7 @@ def format_map(results: Sequence[CapabilityResult]) -> str:
         if result.state == MISSING and capability.acquire:
             lines.append(f"  {'':<29}-> {capability.acquire}")
     lines.append(_MCP_NOTE)
+    lines.append(_TOOL_SCOPE_NOTE)
     return "\n".join(lines)
 
 
