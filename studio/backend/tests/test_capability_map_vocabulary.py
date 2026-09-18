@@ -114,6 +114,16 @@ def test_every_requirement_is_one_the_checks_can_answer():
                     assert requirement.name in allowed, (capability.name, requirement)
 
 
+def test_image_understanding_does_not_offer_detect_shapes_as_a_provider():
+    """detect_shapes only returns object labels and confidences; it cannot answer
+    an open question about an image, so it must not be listed here -- the vision
+    model is image_understanding's only provider. detect_shapes stays reachable
+    as object_detection's first-preference provider."""
+    capability = cm.find("image_understanding", CAPABILITIES)
+    tool_names = {p.name for p in capability.providers if p.kind == "tool"}
+    assert "detect_shapes" not in tool_names
+
+
 def test_speech_to_text_requires_whisper_ffmpeg_and_a_cached_model():
     """Whisper imports cleanly without ffmpeg, then fails on every file."""
     capability = cm.find("speech_to_text", CAPABILITIES)

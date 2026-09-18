@@ -60,6 +60,17 @@ def test_a_tool_provider_renders_as_via_tool_name(monkeypatch):
     assert "via tool python" in out
 
 
+def test_the_tool_scope_note_appears_in_both_renderers(monkeypatch):
+    """A "via tool X" provider names a tool this code cannot confirm is on THIS
+    turn's list. Both the whole map and a single capability's drill-down must
+    say so, or the model has no way to know the naming is unconfirmed."""
+    _by_requirement(monkeypatch, {}, READY)
+    whole_map = cm.execute("find_capability", {})
+    one_capability = cm.execute("find_capability", {"capability": "run_python"})
+    for out in (whole_map, one_capability):
+        assert "only usable if tool X is in your tool list" in out
+
+
 def test_the_best_option_skips_an_unknown_first_provider(monkeypatch):
     _by_requirement(
         monkeypatch,
