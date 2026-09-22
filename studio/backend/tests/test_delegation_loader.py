@@ -37,6 +37,14 @@ _PATH = r"C:\hf-cache\models--unsloth--Qwen3-4B-GGUF\snapshots\aaaa"
 _OTHER_REPO = "unsloth/Qwen3-30B-GGUF"
 _OTHER_PATH = r"C:\hf-cache\models--unsloth--Qwen3-30B-GGUF\snapshots\bbbb"
 
+# A standalone .gguf, as ./models and the LM Studio scanners index one: keyed by
+# its path and its path-free alias, and carrying NO variants -- a single file has
+# no quant to sub-select. Its ":QUANT" form therefore misses, exactly as it does
+# in the real index (verified against _resolve_from_index), while the backend that
+# loaded it still reports hf_variant, parsed out of the filename.
+_FILE = r"C:\models\llama-3-8b.Q4_K_M.gguf"
+_FILE_ALIAS = "llama-3-8b.Q4_K_M"
+
 _INDEX = {
     "unsloth/qwen3-4b-gguf": (_PATH, "Q4_K_M", _REPO),
     "unsloth/qwen3-4b-gguf:q4_k_m": (_PATH, "Q4_K_M", _REPO),
@@ -44,6 +52,8 @@ _INDEX = {
     "unsloth/qwen3-30b-gguf": (_OTHER_PATH, "Q4_K_M", _OTHER_REPO),
     "unsloth/qwen3-30b-gguf:q4_k_m": (_OTHER_PATH, "Q4_K_M", _OTHER_REPO),
     _PATH.lower(): (_PATH, "Q4_K_M", _REPO),
+    _FILE.lower(): (_FILE, None, _FILE_ALIAS),
+    _FILE_ALIAS.lower(): (_FILE, None, _FILE_ALIAS),
 }
 
 
@@ -355,6 +365,37 @@ def test_the_resident_id_round_trips_through_load(monkeypatch):
     loader.load(resident)  # the restore; raises if it did not take
     assert state.switch_calls[-1]["requested_model"] == resident
     assert state.backend.model_identifier == _PATH
+
+
+def test_a_standalone_gguf_reports_the_bare_form_that_resolves(monkeypatch):
+    """The quant-qualified form of a standalone file resolves to nothing -- the
+    backend parsed that quant out of the filename, the index lists none for a
+    single file -- so the id reported has to be the bare one. Returning the
+    prettier form hands the caller an id that cannot be reloaded."""
+    _install_route(monkeypatch, _loaded(_FILE, hf_variant = "Q4_K_M", advertised = None))
+    assert _resolve_local_gguf(f"{_FILE}:Q4_K_M") is None, "the premise: :QUANT must miss here"
+    assert _resolve_local_gguf(_FILE) is not None, "the premise: the bare form must resolve"
+    assert loader.resident_model_id() == _FILE
+
+
+def test_a_standalone_gguf_is_restorable_through_its_bare_form(monkeypatch):
+    _install_route(monkeypatch, _loaded(_FILE, hf_variant = "Q4_K_M", advertised = None))
+    assert loader.resident_is_restorable() is True
+
+
+def test_a_gguf_outside_the_index_is_not_restorable(monkeypatch):
+    """"A GGUF is loaded" is not "this can be loaded again". A file no scan root
+    covers resolves under neither form, so the delegation is refused BEFORE the
+    swap rather than failing to put the model back afterwards."""
+    _install_route(monkeypatch, _loaded(r"D:\elsewhere\mystery.gguf", hf_variant = "Q4_K_M"))
+    assert loader.resident_is_restorable() is False
+
+
+def test_an_unresolvable_resident_gguf_does_not_read_as_nothing_loaded(monkeypatch):
+    _install_route(monkeypatch, _loaded(r"D:\elsewhere\mystery.gguf", hf_variant = "Q4_K_M"))
+    with pytest.raises(loader.LoaderError) as excinfo:
+        loader.resident_model_id()
+    assert "mystery.gguf" in str(excinfo.value)
 
 
 def test_a_transformers_model_is_not_restorable(monkeypatch):

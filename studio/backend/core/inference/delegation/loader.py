@@ -85,6 +85,29 @@ def _format_gguf_id(identity) -> str:
     return f"{advertised}:{variant}" if variant else advertised
 
 
+def _resolvable_id(identity) -> Optional[str]:
+    """The resident GGUF as an id that resolves BACK through the resolver ``load()``
+    swaps on, or None when no form of it does.
+
+    ``"<id>:<variant>"`` first, then the bare ``"<id>"``. The bare fallback is not
+    cosmetic: a standalone ``.gguf`` gets its ``hf_variant`` parsed out of its own
+    filename (``llama_cpp.py``, "For local GGUF files, extract variant from
+    filename if absent"), while the resolver's entry for a single file lists no
+    variants at all, so the quant-qualified form misses and only the bare one
+    resolves. Reporting the prettier form there would hand the caller an id that
+    cannot be reloaded, which is a model the user loses rather than a delegation
+    they are told no about.
+    """
+    _identifier, variant, advertised = identity
+    from core.inference.local_model_resolver import resolve_local_gguf
+
+    candidates = (f"{advertised}:{variant}", advertised) if variant else (advertised,)
+    for candidate in candidates:
+        if candidate and resolve_local_gguf(candidate) is not None:
+            return candidate
+    return None
+
+
 def _transformers_resident() -> Optional[str]:
     """The Transformers/safetensors model the orchestrator holds, else None.
 
@@ -101,22 +124,37 @@ def _transformers_resident() -> Optional[str]:
 def resident_model_id() -> Optional[str]:
     """What is loaded right now, as an id ``load()`` can put back.
 
-    ``"<id>:<hf_variant>"`` for a GGUF with a known quant -- the advertised repo
-    id when an auto-switch load recorded one, else the model identifier. Dropping
-    the quant would let the restore auto-pick a different one.
+    Normally ``"<id>:<hf_variant>"`` -- the advertised repo id when an auto-switch
+    load recorded one, else the model identifier. Dropping the quant would let the
+    restore auto-pick a different one. The form returned is always one that
+    resolves back through the resolver the swap uses (see :func:`_resolvable_id`),
+    so for a standalone ``.gguf`` this is the bare id: the id that works beats the
+    id that reads better.
 
-    None when nothing is loaded. Raises LoaderError when a Transformers model is
-    resident: that is neither "nothing" nor something this path can reload, and
-    answering None would let a caller restore nothing and say nothing, which is
-    how a user's model gets silently replaced by the delegate's.
+    None when nothing is loaded.
+
+    Raises LoaderError in the two states that are neither "nothing loaded" nor
+    restorable -- a resident Transformers model, and a GGUF no form of whose id
+    resolves. Both are backstops: :func:`resident_is_restorable` answers the same
+    question without raising, and a caller is expected to ask it first. They raise
+    rather than answer None because None reads as "nothing to put back", and a
+    caller acting on that restores nothing and says nothing, which is how a user's
+    model gets silently replaced by the delegate's.
     """
     try:
         identity = _gguf_identity()
         active = None if identity is not None else _transformers_resident()
+        restorable = _resolvable_id(identity) if identity is not None else None
     except BaseException as exc:  # noqa: BLE001 - reported, never swallowed
         raise LoaderError(f"could not read the resident model: {_reason(exc)}") from exc
     if identity is not None:
-        return _format_gguf_id(identity)
+        if restorable is None:
+            raise LoaderError(
+                f"the resident model '{_format_gguf_id(identity)}' is not in this server's "
+                "local model index under any id that would load it back, so it could not be "
+                "restored after a delegation. Check resident_is_restorable() before swapping."
+            )
+        return restorable
     if active:
         raise LoaderError(
             f"'{active}' is loaded through Transformers, and delegation can only reload a "
@@ -132,13 +170,27 @@ def resident_is_restorable() -> bool:
     False while a Transformers/safetensors model is resident: loading a GGUF
     unloads it (``_load_model_impl`` tears the Unsloth model down before the GGUF
     launch) and auto-switch can only ever load a downloaded local GGUF, so it
-    could not be restored. True for a resident GGUF, and when nothing is loaded.
+    could not be restored.
+
+    False, too, for a resident GGUF whose id does not resolve back through the
+    resolver the swap runs on -- a standalone file outside every scan root, say.
+    "A GGUF is loaded" is not the same question as "this can be loaded again", and
+    only the second one is worth anything to a caller about to unload it. Asking
+    costs a resolver lookup (cached, and this is never called from the event loop);
+    not asking costs the user their model.
+
+    True for a resident GGUF that does resolve, and when nothing is loaded.
 
     Never raises: a backend this cannot read is one it cannot promise to restore,
     so an unreadable answer is a refusal.
     """
     try:
-        return _transformers_resident() is None
+        if _transformers_resident() is not None:
+            return False
+        identity = _gguf_identity()
+        if identity is None:
+            return True
+        return _resolvable_id(identity) is not None
     except BaseException:  # noqa: BLE001 - fail closed: cannot tell means cannot promise
         return False
 
