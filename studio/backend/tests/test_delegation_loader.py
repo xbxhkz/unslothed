@@ -270,9 +270,9 @@ def test_a_model_that_is_not_downloaded_is_refused_before_auto_switch_is_called(
     state = _install_route(monkeypatch, _loaded_by_auto_switch(_REPO))
     with pytest.raises(loader.LoaderError) as excinfo:
         loader.load("someone/NotDownloaded-GGUF:Q4_K_M")
+    assert state.switch_calls == [], "auto-switch must never see a model that is not here"
     assert "someone/NotDownloaded-GGUF:Q4_K_M" in str(excinfo.value)
     assert "not downloaded" in str(excinfo.value)
-    assert state.switch_calls == [], "auto-switch must never see a model that is not here"
 
 
 def test_an_exception_from_auto_switch_becomes_a_LoaderError(monkeypatch):
