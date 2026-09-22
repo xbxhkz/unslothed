@@ -36,7 +36,15 @@ def _resolve_local(model_id: str):
     """(load_path, gguf_variant, loader_id) when the model is downloaded, else None.
 
     Delegates to the resolver auto-switch uses, so "downloaded" means the same
-    thing here as it does when a request names a model."""
+    thing here as it does when a request names a model.
+
+    Calls resolve_local_gguf with the default allow_scan = True, which on a
+    stale index (5s TTL) runs a synchronous walk over ./models, the HF caches,
+    LM Studio folders and user scan folders. That is deliberate: allow_scan =
+    False answers only from the last built index and never rebuilds, so on a
+    cold index it would report a downloaded model as missing and refuse the
+    first delegation of a session. This function must never be called on the
+    event loop; an async caller must wrap it in asyncio.to_thread."""
     from core.inference.local_model_resolver import resolve_local_gguf
 
     return resolve_local_gguf(model_id)
@@ -66,7 +74,10 @@ def resolve(role) -> Optional[RoleBinding]:
 
 
 def availability(role) -> Readiness:
-    """Readiness for a role. Never raises."""
+    """Readiness for a role. Never raises.
+
+    May run a synchronous directory scan (see _resolve_local); never call this
+    on the event loop, wrap it in asyncio.to_thread from an async caller."""
     binding = resolve(role)
     if binding is None:
         return Readiness(UNKNOWN, f"no model is bound to the role {normalize_role(role)!r}")
