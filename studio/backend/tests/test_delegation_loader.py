@@ -87,17 +87,37 @@ def test_the_adapter_does_not_reimplement_loading():
     assert "acquire_for" not in source, "the route's loader already arbitrates; do not do it twice"
 
 
+class _FakeLoadRequest:
+    """Stand-in for models.inference.LoadRequest that records exactly the kwargs
+    it was constructed with, so the test can tell "the adapter filtered this
+    key out" apart from "pydantic's default extra='ignore' policy silently
+    dropped it at construction time" -- the latter would make a hasattr()-style
+    assertion pass whether or not the adapter's own filter exists at all."""
+
+    model_fields = {"model_path": None, "max_seq_length": None}
+
+    def __init__(self, **kwargs):
+        self.received_kwargs = dict(kwargs)
+        self.model_path = kwargs.get("model_path")
+        self.max_seq_length = kwargs.get("max_seq_length")
+
+
 def test_unknown_override_keys_are_dropped_known_ones_pass_through(monkeypatch):
     """LoadRequest has no `extra` policy set, so pydantic silently ignores unknown
     kwargs today -- a role override like {"n_ctx": 16384} would do nothing, since
     the real field is max_seq_length. The adapter filters overrides to
     LoadRequest's real fields so that mistake is explicit rather than silent, and
     so the adapter keeps working if upstream ever switches to rejecting extras."""
+    import models.inference as models_inference
+
+    monkeypatch.setattr(models_inference, "LoadRequest", _FakeLoadRequest)
     calls = []
     _route_module(monkeypatch, loader_calls = calls)
     monkeypatch.setattr(loader, "_run_coroutine", lambda coro: __import__("asyncio").run(coro))
     loader.load("repo/Model:Q4", {"n_ctx": 16384, "max_seq_length": 8192})
     assert len(calls) == 1
     request, _fastapi_request, _subject = calls[0]
-    assert not hasattr(request, "n_ctx"), "unknown override key must not reach LoadRequest"
-    assert request.max_seq_length == 8192, "a real LoadRequest field must pass through"
+    assert "n_ctx" not in request.received_kwargs, "unknown override key must not reach LoadRequest"
+    assert request.received_kwargs.get("max_seq_length") == 8192, (
+        "a real LoadRequest field must pass through"
+    )
