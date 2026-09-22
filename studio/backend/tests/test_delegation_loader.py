@@ -260,11 +260,19 @@ def test_a_swap_that_did_not_happen_is_a_LoaderError(monkeypatch):
     assert len(state.switch_calls) == 1
 
 
-def test_a_model_that_resolves_to_nothing_local_is_a_LoaderError(monkeypatch):
-    _install_route(monkeypatch, _loaded_by_auto_switch(_REPO))
+def test_a_model_that_is_not_downloaded_is_refused_before_auto_switch_is_called(monkeypatch):
+    """Auto-switch's miss path offers to DOWNLOAD the model, and schedules the
+    watcher for that download with asyncio.create_task on the running loop -- the
+    throwaway one asyncio.run closes as soon as the refusal unwinds. The watcher
+    dies at its first await, leaving a "download" row running forever and the
+    single-flight slot released mid-download. So the miss has to be caught here,
+    before the call, not reported after it."""
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_REPO))
     with pytest.raises(loader.LoaderError) as excinfo:
-        loader.load("openai/gpt-4")
-    assert "openai/gpt-4" in str(excinfo.value)
+        loader.load("someone/NotDownloaded-GGUF:Q4_K_M")
+    assert "someone/NotDownloaded-GGUF:Q4_K_M" in str(excinfo.value)
+    assert "not downloaded" in str(excinfo.value)
+    assert state.switch_calls == [], "auto-switch must never see a model that is not here"
 
 
 def test_an_exception_from_auto_switch_becomes_a_LoaderError(monkeypatch):
@@ -313,6 +321,32 @@ def test_a_bare_id_is_served_by_any_quant_of_that_repo(monkeypatch):
     state = _install_route(monkeypatch, _loaded_by_auto_switch(_OTHER_REPO), swaps = False)
     state.backend = _loaded(_PATH, hf_variant = "Q8_0", advertised = _REPO)
     loader.load(_REPO)  # must not raise
+
+
+def test_a_backend_that_is_not_loaded_never_counts_as_serving(monkeypatch):
+    """A torn-down backend keeps its last model_identifier. Without the is_loaded
+    half of the mirror, a swap that unloaded the old model and then failed would
+    be read off that stale identifier and reported as success -- the one state
+    where the delegate runs on no model at all."""
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_OTHER_REPO), swaps = False)
+    state.backend = _loaded(_PATH, hf_variant = "Q4_K_M", advertised = _REPO, is_loaded = False)
+    with pytest.raises(loader.LoaderError):
+        loader.load(f"{_REPO}:Q4_K_M")
+
+
+def test_the_advertised_id_alone_can_decide_that_it_is_serving(monkeypatch):
+    """_already_serving matches on the advertised id as well as the identifier,
+    "so a model loaded manually by repo id and one loaded by auto-switch both
+    count as already serving rather than triggering a needless reswap". Here the
+    identifier matches nothing the resolver returned -- the index has moved on to
+    a newer snapshot directory -- and only the advertised repo id can decide it."""
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_OTHER_REPO), swaps = False)
+    state.backend = _loaded(
+        r"C:\hf-cache\models--unsloth--Qwen3-4B-GGUF\snapshots\older",
+        hf_variant = "Q4_K_M",
+        advertised = _REPO,
+    )
+    loader.load(f"{_REPO}:Q4_K_M")  # must not raise
 
 
 def test_a_model_loaded_by_path_counts_as_serving_its_repo_id(monkeypatch):

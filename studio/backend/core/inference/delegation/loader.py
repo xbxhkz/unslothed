@@ -99,13 +99,23 @@ def _resolvable_id(identity) -> Optional[str]:
     they are told no about.
     """
     _identifier, variant, advertised = identity
-    from core.inference.local_model_resolver import resolve_local_gguf
-
     candidates = (f"{advertised}:{variant}", advertised) if variant else (advertised,)
     for candidate in candidates:
-        if candidate and resolve_local_gguf(candidate) is not None:
+        if candidate and _resolve_local(candidate) is not None:
             return candidate
     return None
+
+
+def _resolve_local(model_id: str):
+    """``(load_path, gguf_variant, loader_id)`` for a downloaded local GGUF, else None.
+
+    The resolver auto-switch itself resolves with, so "is this here" is answered
+    the same way on both sides of the call. May scan: this runs in a tool worker
+    thread, never on the event loop, and the scan is cached for 5s.
+    """
+    from core.inference.local_model_resolver import resolve_local_gguf
+
+    return resolve_local_gguf(model_id)
 
 
 def _transformers_resident() -> Optional[str]:
@@ -246,12 +256,9 @@ def _auto_switch_serves(model_id: str) -> bool:
     of a swap identity -- and holds an explicit quant to the loaded one while a
     bare id is satisfied by any quant of that repo.
     """
-    from core.inference.local_model_resolver import resolve_local_gguf
     from core.inference.openai_auto_download import looks_like_quant, split_model_ref
 
-    # The same resolution the swap ran on. May scan: this is a tool worker
-    # thread, never the event loop, and the scan is cached for 5s.
-    resolved = resolve_local_gguf(model_id)
+    resolved = _resolve_local(model_id)  # the same resolution the swap ran on
     if resolved is None:
         return False
     target_id, variant, override_id = resolved
@@ -313,6 +320,26 @@ def load(model_id: str, overrides: Optional[dict] = None) -> None:
         raise LoaderError(
             "the inference route is not loaded in this process, so nothing can swap the model"
         )
+
+    # Refuse a model that is not here BEFORE handing over. Auto-switch's miss path
+    # offers to fetch it (``_maybe_auto_download_model``), and that fetch schedules
+    # its watcher with ``asyncio.create_task`` on the running loop -- which here is
+    # the one ``asyncio.run`` closes moments later, when the refusal unwinds this
+    # call. The watcher would be cancelled at its first await, leaving a "download"
+    # row running forever in the API monitor and releasing the single-flight slot
+    # while the download is still going, which that module warns admits a second
+    # multi-gigabyte fetch of the same repo. A delegation must not start a download
+    # mid-turn regardless; this also spares it a pointless Hub round trip.
+    try:
+        available = _resolve_local(model_id)
+    except BaseException as exc:  # noqa: BLE001 - reported, never swallowed
+        raise LoaderError(f"could not look up {model_id}: {_reason(exc)}") from exc
+    if available is None:
+        raise LoaderError(
+            f"{model_id} is not downloaded on this server, so delegation cannot load it. "
+            "Download it in Unsloth Studio first."
+        )
+
     try:
         _run_coroutine(switch(model_id, _request_stand_in(), DELEGATION_SUBJECT))
     except BaseException as exc:  # noqa: BLE001 - reported, never swallowed
