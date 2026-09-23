@@ -100,19 +100,66 @@ def test_the_timeout_stops_a_slow_delegate():
     assert result.rounds < 50
 
 
-def test_cancellation_stops_the_loop():
+def test_the_post_tool_cancel_check_stops_the_loop_mid_round():
+    """Cancellation raised during one tool call must stop the round before the
+    NEXT tool call in that same round runs. The pre-round check alone is too
+    late for this: it only runs again after every tool in the round has
+    already executed."""
     cancel = threading.Event()
+    executed = []
 
     def execute_tool(name, arguments, **kwargs):
-        cancel.set()
+        executed.append(name)
+        if name == "first":
+            cancel.set()
         return "x"
 
     result = subagent.run_subagent(
         messages = [], tools = [],
-        call_model = _script(_assistant(calls = [("terminal", "{}")])),
+        call_model = _script(_assistant(calls = [("first", "{}"), ("second", "{}")])),
         execute_tool = execute_tool, cancel_event = cancel,
     )
+    assert executed == ["first"], "the second tool call in the round must never run"
     assert result.stopped_because == "cancelled"
+
+
+class _CancelAfter:
+    """A cancel_event stand-in whose is_set() returns True starting on call N+1.
+
+    Lets a test pin exactly which check -- pre-round or post-tool -- is the
+    one that first observes cancellation, without a real background thread.
+    The production loop only ever calls .is_set(), never .set()/.clear().
+    """
+
+    def __init__(self, calls_before_set):
+        self._remaining = calls_before_set
+
+    def is_set(self):
+        if self._remaining > 0:
+            self._remaining -= 1
+            return False
+        return True
+
+
+def test_the_pre_round_cancel_check_stops_the_loop_between_rounds():
+    """Cancellation that becomes visible only after a round's own tool call has
+    already finished (so that round's post-tool check still saw "not
+    cancelled") must still stop the loop before the NEXT round's call_model
+    runs."""
+    # Call 1 (round 1's pre-round check) and call 2 (round 1's post-tool
+    # check) both see "not cancelled"; call 3 (round 2's pre-round check) is
+    # the first to see it -- so round 2's call_model must never run.
+    cancel = _CancelAfter(calls_before_set = 2)
+    call_model = _script(_assistant(calls = [("terminal", "{}")]))
+    result = subagent.run_subagent(
+        messages = [], tools = [],
+        call_model = call_model,
+        execute_tool = lambda name, arguments, **kw: "again",
+        cancel_event = cancel,
+    )
+    assert len(call_model.seen) == 1, "round 2's call_model must never run once cancellation is seen"
+    assert result.stopped_because == "cancelled"
+    assert result.rounds == 1
 
 
 def test_a_tool_that_raises_is_reported_to_the_delegate_not_propagated():
