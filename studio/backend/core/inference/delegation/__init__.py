@@ -24,14 +24,25 @@ delegate as "what was resident", both restores succeed, the user's model is
 gone, and neither result carries a warning -- from inside either one, nothing
 failed.
 
-KNOWN LIMITATION, not fixed here: the delegate is given ALL_TOOLS minus
-ask_model, not the tools the user left switched on. ``execute_tool``'s signature
-(tools.py:10039) carries no enabled-tool list and no permission mode; the only
-code holding them is the tool loops, which sit above this layer in files this
-fork does not edit. So a tool switched off in the UI is still reachable by a
-delegate. The dangerous half of that exposure is covered by the per-call risk
-gate in :func:`_delegate_execute_tool`, which refuses outright anything the
-approval classifier would have prompted on; the rest is recorded here.
+WHAT APPROVING A DELEGATION APPROVES, stated rather than buried. ``ask_model`` is
+not on the classifier's safe lists, so the primary's tool loop prompts for the
+delegation itself: the user approves one role and one task, and the work that
+follows runs inside that approval. Two limits follow from it, both because
+``execute_tool``'s signature (tools.py:10039-10053) carries neither the permission
+mode nor the enabled-tool list, and the only code holding either is the tool loops
+-- upstream lines, above this layer, in files this fork does not edit:
+
+* the delegate's individual tool calls are not confirmed separately, so a call
+  that would have prompted inside the conversation does not prompt inside a
+  delegation; and
+* the delegate is given ALL_TOOLS minus ask_model, not the tools the user left
+  switched on, so a tool switched off in the UI is still reachable by a delegate.
+
+Bounded rather than open: one role, the sub-agent's iteration and time caps, a
+written transcript of every round, and the sandbox with its blocklist, rlimits and
+secret-stripping still in force underneath -- none of that is approval-gated. It is
+the same shape as approving a ``terminal`` script, which does not re-prompt per
+syscall.
 """
 
 from __future__ import annotations
@@ -50,13 +61,6 @@ MAX_DELEGATIONS_PER_WINDOW = 2
 # execute_tool receives a session id, not a turn id -- so this is the closest
 # observable approximation, and the refusal says so.
 DELEGATION_WINDOW_S = 600.0
-
-DELEGATE_DENIED_MESSAGE = (
-    "Error: {name} needs the user's approval and a delegated model cannot ask for it -- "
-    "the approval prompt belongs to the conversation you were called from, which is "
-    "blocked waiting on you. Say in your result what you needed and why; the model that "
-    "called you can run it there, where the user can see the prompt."
-)
 
 DELEGATION_BUSY_MESSAGE = (
     "Error: another conversation is already delegating. Only one delegation runs at a "
@@ -83,6 +87,11 @@ _recent_guard = threading.Lock()
 # conversation must be told no now rather than parked behind it. The thread-local
 # depth guard above is checked first, so a nested call never contends this.
 _delegation_gate = threading.Lock()
+# Which thread holds the gate, or None. threading.Lock keeps no owner of its own,
+# so release() from a thread that never acquired it succeeds -- and locked() cannot
+# tell "a delegation is running" from "a dead test left it held", because it is True
+# in both. Written only by the holder, immediately inside and before release.
+_gate_owner: Optional[int] = None
 
 
 def _loader_error(message: str):
@@ -93,10 +102,15 @@ def _reset_for_tests() -> None:
     with _recent_guard:
         _recent.clear()
     _active.delegation_id = None
-    try:
-        _delegation_gate.release()
-    except RuntimeError:
-        pass  # already released, which is the normal case
+    # Frees a gate a dead test left behind; never one a live delegation is holding,
+    # which would let a second delegation start on top of it and lose the user's
+    # model between the two restores. An unowned gate is the stray case -- a
+    # delegation always records itself before it can block anything.
+    if _gate_owner in (None, threading.get_ident()):
+        try:
+            _delegation_gate.release()
+        except RuntimeError:
+            pass  # already released, which is the normal case
 
 
 def active_delegation_id() -> Optional[str]:
@@ -208,11 +222,13 @@ def _window_has_room(session_id: str, now: float) -> bool:
 def _window_record(session_id: str, now: float) -> None:
     """Spend one of the window's delegations.
 
-    Split from the check so a refusal, or a setup that failed before anything was
+    Split from the check so a refusal, or an attempt that failed before anything was
     swapped, costs nothing: two OSErrors out of workspace.create used to leave the
-    session refused for ten minutes having loaded nothing at all. Called
-    immediately before the first load, the first line that actually spends a swap;
-    the process-wide gate means nothing can slip between the check and here.
+    session refused for ten minutes having loaded nothing at all. Called once
+    ``load()`` has RETURNED -- the first moment a swap has actually been paid for,
+    since load() raises before it touches the backend when auto-switch is off or the
+    delegate is not downloaded. The process-wide gate is held across the check and
+    this, so nothing can slip between them.
     """
     with _recent_guard:
         stamps = _window_prune(session_id, now)
@@ -242,13 +258,16 @@ def _execute(arguments, *, session_id = None, cancel_event = None, **kwargs) -> 
             "cannot delegate again. Do this part yourself."
         )
 
+    global _gate_owner
     if not _delegation_gate.acquire(blocking = False):
         return DELEGATION_BUSY_MESSAGE
+    _gate_owner = threading.get_ident()
     try:
         return _delegate(arguments, session_id = session_id, cancel_event = cancel_event, **kwargs)
     finally:
         # Wraps everything, including the restore: a delegation that died still has
         # to leave the next conversation able to run one.
+        _gate_owner = None
         _delegation_gate.release()
 
 
@@ -282,8 +301,8 @@ def _delegate(arguments, *, session_id = None, cancel_event = None, **kwargs) ->
     # bucket 'None'. Left that way deliberately: a tool call without a session has
     # nothing else to key on, and lumping them together errs towards refusing.
     session_key = str(session_id)
-    # Checked here, spent at the load below. A refusal costs no directory, and a
-    # setup that fails before the first swap costs no delegation.
+    # Checked here, spent only once the load below has returned. A refusal costs no
+    # directory, and an attempt that fails before the first swap costs no delegation.
     if not _window_has_room(session_key, time.monotonic()):
         return (
             f"Error: the delegation limit was reached -- already delegated "
@@ -307,25 +326,24 @@ def _delegate(arguments, *, session_id = None, cancel_event = None, **kwargs) ->
     passthrough = {key: kwargs[key] for key in _TOOL_PASSTHROUGH if key in kwargs}
 
     _active.delegation_id = files.delegation_id
-    swapped = False
     try:
-        _window_record(session_key, time.monotonic())
         # No overrides are passed: load() ignores them and applies the model's own
         # saved launch settings through auto-switch, exactly as an API request
         # naming that model would. A second conversion path would disagree with it.
         _loader.load(binding.model)
-        swapped = True
+        # Spent here, not at the check: load() raises before it touches the backend
+        # when auto-switch is off or the delegate is not downloaded, and an attempt
+        # that cost no swap must cost no delegation. The process-wide gate is held
+        # across both, so nothing can slip between them.
+        _window_record(session_key, time.monotonic())
         result = subagent.run_subagent(
             messages = [
-                {"role": "system", "content": f"You are the {role} model. Write your result to {paths['work']}."},
+                {"role": "system", "content": _delegate_system_prompt(role, paths)},
                 {"role": "user", "content": brief_text},
             ],
             tools = _delegate_tools(),
             call_model = _call_model_for(binding),
-            execute_tool = _delegate_execute_tool(
-                bypass = bool(passthrough.get("disable_sandbox")),
-                cancel_event = cancel_event,
-            ),
+            execute_tool = _delegate_execute_tool(cancel_event = cancel_event),
             on_round = lambda line: workspace.append_transcript(files, line),
             cancel_event = cancel_event,
             session_id = session_id,
@@ -343,21 +361,45 @@ def _delegate(arguments, *, session_id = None, cancel_event = None, **kwargs) ->
         body = f"Error: the {role} model failed: {exc}"
     finally:
         _active.delegation_id = None
-        # Only restore what was actually swapped out. load() raises before it
-        # touches the backend when auto-switch is off or the delegate is not
-        # downloaded -- the likeliest first-run failure there is -- and an
-        # unconditional restore would then fail for the same reason and tell the
-        # user "the model now loaded is not the one you were using" about a model
-        # that never moved. Never quietly lying must not become loudly lying.
-        restore_note = _restore(resident) if swapped else ""
+        restore_note = _restore(resident)
     return body if not restore_note else f"{body}\n\n{restore_note}"
 
 
+def _delegate_system_prompt(role: str, paths: dict) -> str:
+    """What the delegate is told about its own situation.
+
+    The second sentence is not decoration. The delegate's caller cannot see its
+    screen, its reasoning or its tool calls -- only the files named here -- so the
+    transcript is the record of what happened rather than a side effect, and saying
+    so is what makes a delegate write to it as if someone will read it. It is also
+    the model-facing half of the disclosure in ask_model's description: the calls it
+    makes are not confirmed one by one, because the user already approved this."""
+    return (
+        f"You are the {role} model. Write your result to {paths['work']}. "
+        "You are working on behalf of another model, which cannot see anything you "
+        "do except through these files -- so what you write is the whole record of "
+        "the work."
+    )
+
+
 def _restore(resident: Optional[str]) -> str:
-    """Put back what was loaded. A failure here is reported, never swallowed:
-    otherwise the next turn runs on a different model than the user believes."""
+    """Put back what was loaded, unless it never left.
+
+    Asked of the loader rather than inferred from how far load() got: three of its
+    raise sites fire after auto-switch has already unloaded the resident model, so a
+    flag set on load()'s return cannot tell "nothing moved" from "moved, then failed"
+    -- and getting that wrong the second way loses the user's model in silence.
+    serves() is the same comparison auto-switch makes for itself.
+
+    A failure here is reported, never swallowed: otherwise the next turn runs on a
+    different model than the user believes."""
     if not resident:
         return ""
+    try:
+        if _loader.serves(resident):
+            return ""
+    except BaseException:  # noqa: BLE001 - unanswerable means restore anyway
+        pass
     try:
         _loader.load(resident)
         return ""
@@ -375,27 +417,27 @@ def _delegate_tools() -> list:
     return [t for t in ALL_TOOLS if t.get("function", {}).get("name") not in DELEGATION_TOOL_NAMES]
 
 
-def _delegate_execute_tool(*, bypass: bool, cancel_event = None):
-    """The audited executor, with a gate standing in for the approval prompt.
+def _delegate_execute_tool(*, cancel_event = None):
+    """The delegate's executor: ``execute_tool`` with the cancel event bound in.
 
-    The delegate's tool calls happen inside one of the primary's, so they never
-    reach a tool loop -- and every approval prompt in this codebase lives in a tool
-    loop, above execute_tool (studio_tool_loop.py:1165, llama_cpp.py:23959,
-    safetensors_agentic.py:1252). execute_tool's signature carries no permission
-    mode and no enabled-tool list, so the delegate cannot inherit the handshake. It
-    is held to less instead: anything the classifier would have prompted on is
-    refused outright.
+    ``cancel_event`` is bound here rather than forwarded because ``run_subagent``
+    takes it as a named parameter of its own, so it never lands in the
+    ``**tool_kwargs`` it passes on. Without it a delegate sitting in a long terminal
+    call ignores Stop until that call returns, not merely until the next round.
 
-    ``bypass`` is the loops' ``bypass_permissions``, which reaches here as
-    ``disable_sandbox`` -- the same flag they gate the prompt on
-    (studio_tool_loop.py:1142/:1224, llama_cpp.py:23930/:24016). When it is set the
-    user switched the gate off for the primary, so the delegate runs ungated too
-    and matches it.
+    There is deliberately NO per-call approval gate here, and the reason is worth
+    keeping: one was tried and it was inverted. ``is_high_risk_tool_call`` fails
+    closed on names it does not know, and it does not know any of this fork's ten
+    vision and code-intelligence tools -- a ``vision`` delegate could not call a
+    single vision tool, nor ``edit_file``, which this module's own system prompt
+    tells it to use -- while bare ``python`` and ``terminal`` classify safe and went
+    through. Fail-closed is right in a loop that can PROMPT, where an unknown tool
+    asks the user. Here there is nobody to ask, so it is fail-dead instead.
 
-    ``cancel_event`` is bound here rather than forwarded: run_subagent takes it as
-    a named parameter of its own, so it never lands in the ``**tool_kwargs`` it
-    passes on. Without it a delegate sitting in a long terminal call ignores Stop
-    until that call returns, not merely until the next round.
+    The approval point is one layer up and it is the honest one: ``ask_model`` is
+    deliberately absent from the classifier's safe lists, so the primary's own loop
+    prompts for the DELEGATION -- a role and a task the user can actually read --
+    before any of this runs. See the module docstring for what that approval covers.
     """
     from core.inference.tools import execute_tool
 
@@ -403,20 +445,4 @@ def _delegate_execute_tool(*, bypass: bool, cancel_event = None):
         kwargs.setdefault("cancel_event", cancel_event)
         return execute_tool(name, arguments, **kwargs)
 
-    if bypass:
-        return run
-
-    def gated(name, arguments, **kwargs) -> str:
-        from core.inference.tools import is_high_risk_tool_call
-
-        try:
-            risky = is_high_risk_tool_call(
-                name, arguments if isinstance(arguments, dict) else {}
-            )
-        except BaseException:  # noqa: BLE001 - an unclassifiable call is a refused call
-            risky = True
-        if risky:
-            return DELEGATE_DENIED_MESSAGE.format(name = name)
-        return run(name, arguments, **kwargs)
-
-    return gated
+    return run

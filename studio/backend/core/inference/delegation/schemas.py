@@ -11,9 +11,11 @@ ASK_MODEL_TOOL = {
             "Hand a self-contained task to another model configured for a role (for example "
             "'coding' or 'vision'), then continue once it is done. The other model is loaded, "
             "works with its own tools, writes its result to a file, and the model you were "
-            "using is loaded again. Expensive: it swaps models twice, so use it when the other "
-            "model is genuinely better suited, not for small steps. Returns a short summary and "
-            "the paths of the files it wrote."
+            "using is loaded again. It works with the same tools this conversation has, and its "
+            "individual tool calls are not confirmed separately -- approving this call approves "
+            "the work it does. Expensive: it swaps models twice, so use it when the other model "
+            "is genuinely better suited, not for small steps. Returns a short summary and the "
+            "paths of the files it wrote."
         ),
         "parameters": {
             "type": "object",
