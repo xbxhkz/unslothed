@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS tool_audit (
     ts               REAL    NOT NULL,
     duration_ms      INTEGER,
     session_id       TEXT,
+    -- Which delegation made this call, or NULL for the primary's own. Its own
+    -- column rather than a marker folded into session_id: approvals are keyed by
+    -- session, so moving that would send the confirmation prompt somewhere the
+    -- user is not looking.
+    delegation_id    TEXT,
     thread_id        TEXT,
     tool_name        TEXT    NOT NULL,
     arguments_json   TEXT    NOT NULL,
@@ -65,6 +70,13 @@ def _connect() -> Iterator[sqlite3.Connection]:
         global _SCHEMA_READY
         if not _SCHEMA_READY:
             conn.executescript(_DDL)
+            # CREATE TABLE IF NOT EXISTS does nothing to a table that already
+            # exists, and this one does exist in every installed database, so a
+            # new column needs a migration as well -- the same PRAGMA-then-ALTER
+            # storage/rag_db.py:300-302 uses.
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(tool_audit)").fetchall()}
+            if columns and "delegation_id" not in columns:
+                conn.execute("ALTER TABLE tool_audit ADD COLUMN delegation_id TEXT")
             conn.commit()
             _SCHEMA_READY = True
         yield conn
@@ -81,18 +93,20 @@ def record_start(
     session_id: Optional[str],
     thread_id: Optional[str],
     disable_sandbox: bool,
+    delegation_id: Optional[str] = None,
 ) -> int:
     with _connect() as conn:
         cur = conn.execute(
             """
             INSERT INTO tool_audit
-                (ts, session_id, thread_id, tool_name, arguments_json, paths_json,
-                 redacted, disable_sandbox, outcome)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running')
+                (ts, session_id, delegation_id, thread_id, tool_name, arguments_json,
+                 paths_json, redacted, disable_sandbox, outcome)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running')
             """,
             (
                 time.time(),
                 session_id,
+                delegation_id,
                 thread_id,
                 tool_name,
                 arguments_json,
