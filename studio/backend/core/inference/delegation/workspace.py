@@ -58,7 +58,15 @@ def create(session_id, role) -> DelegationFiles:
     )
 
 
-def write_brief(files: DelegationFiles, *, role, task, context = "") -> None:
+def write_brief(files: DelegationFiles, *, role, task, context = "") -> str:
+    """Write the brief and return its text.
+
+    The text comes back so the caller can put it straight into the delegate's
+    prompt. Re-reading brief.md instead would make the whole delegation depend on
+    a write this function is explicitly allowed to lose -- and it would fail after
+    both model swaps had been paid for, blaming the delegate model for an OSError
+    on a file. The file itself still matters; it is what the user reads.
+    """
     body = (
         f"# Delegation {files.delegation_id}\n\n"
         f"**Role:** {role}\n\n"
@@ -71,6 +79,7 @@ def write_brief(files: DelegationFiles, *, role, task, context = "") -> None:
         _write_text(files.brief, body)
     except BaseException:  # noqa: BLE001 - a delegation must not die writing a file
         pass
+    return body
 
 
 def write_work(files: DelegationFiles, text: str) -> None:

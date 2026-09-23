@@ -284,6 +284,27 @@ def _auto_switch_serves(model_id: str) -> bool:
     return True
 
 
+def serves(model_id: str) -> bool:
+    """Whether a request for ``model_id`` would be answered by what is loaded now.
+
+    The same comparison auto-switch makes for itself, so delegation's per-turn
+    guard and the loader's own post-load check can never disagree. It re-resolves
+    ``model_id`` and matches the resident backend against both the resolved target
+    and the override id, so every alias the resolver indexes counts -- a bare repo
+    id, the concrete load path, a standalone file's path-free name. A caller
+    comparing :func:`resident_model_id`'s output as a string matches only the one
+    form that function happens to advertise, and refuses the rest.
+
+    Raises LoaderError if residency cannot be read at all.
+    """
+    try:
+        return _auto_switch_serves(model_id)
+    except LoaderError:
+        raise
+    except BaseException as exc:  # noqa: BLE001 - reported, never swallowed
+        raise LoaderError(f"could not confirm {model_id} is loaded: {_reason(exc)}") from exc
+
+
 def _run_coroutine(coro):
     """Run a coroutine from this (synchronous) tool thread.
 
@@ -345,8 +366,10 @@ def load(model_id: str, overrides: Optional[dict] = None) -> None:
     except BaseException as exc:  # noqa: BLE001 - reported, never swallowed
         raise LoaderError(f"could not load {model_id}: {_reason(exc)}") from exc
 
+    # Through serves(), not _auto_switch_serves() directly: the post-load check and
+    # delegation's per-turn guard are then genuinely one path, and cannot drift.
     try:
-        served = _auto_switch_serves(model_id)
+        served = serves(model_id)
     except BaseException as exc:  # noqa: BLE001 - reported, never swallowed
         raise LoaderError(f"could not confirm {model_id} is loaded: {_reason(exc)}") from exc
     if not served:

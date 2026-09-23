@@ -357,6 +357,41 @@ def test_a_model_loaded_by_path_counts_as_serving_its_repo_id(monkeypatch):
     loader.load(f"{_REPO}:Q4_K_M")  # must not raise
 
 
+# ── serves(): the one comparison both sides use ─────────────────────────
+
+
+def test_serves_matches_the_aliases_a_string_compare_misses(monkeypatch):
+    """Delegation's per-turn guard used to compare resident_model_id() against the
+    binding as strings, and resident_model_id advertises exactly one of a model's
+    ids. A standalone .gguf reports its path while the binding names the index
+    alias: the same model, refused on the delegate's first turn after both swaps
+    had been paid for."""
+    _install_route(monkeypatch, _loaded(_FILE, hf_variant = "Q4_K_M", advertised = None))
+    assert loader.resident_model_id() == _FILE
+    assert _FILE != _FILE_ALIAS, "the premise: two ids, one model"
+    assert loader.serves(_FILE_ALIAS) is True
+    assert loader.serves(_OTHER_REPO) is False
+
+
+def test_serves_holds_an_explicit_quant_to_the_loaded_one(monkeypatch):
+    _install_route(monkeypatch, _loaded(_PATH, hf_variant = "Q4_K_M", advertised = _REPO))
+    assert loader.serves(f"{_REPO}:Q4_K_M") is True
+    assert loader.serves(_REPO) is True, "a bare id is satisfied by any quant"
+    assert loader.serves(f"{_REPO}:Q8_0") is False
+
+
+def test_load_confirms_the_swap_through_serves(monkeypatch):
+    """One path, so the post-load check and delegation's per-turn guard cannot
+    drift apart into two answers to the same question."""
+    _install_route(monkeypatch, _loaded_by_auto_switch(_OTHER_REPO), swaps = False)
+    asked = []
+    real = loader.serves
+    monkeypatch.setattr(loader, "serves", lambda model_id: asked.append(model_id) or real(model_id))
+    with pytest.raises(loader.LoaderError):
+        loader.load(f"{_REPO}:Q4_K_M")
+    assert asked == [f"{_REPO}:Q4_K_M"], "load() must confirm through serves(), not around it"
+
+
 # ── resident_model_id() / resident_is_restorable() ──────────────────────
 
 
