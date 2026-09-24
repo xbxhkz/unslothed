@@ -375,6 +375,8 @@ def test_the_execution_context_reaches_the_delegates_tools(rig, monkeypatch, rec
         session_id = "s1", cancel_event = cancel, thread_id = "t1",
         rag_scope = {"mode": "dense"}, timeout = 42, disable_sandbox = False,
         website_policy = {"allow": []}, output_callback = lambda chunk: None,
+        conversation_branch = [{"role": "user", "content": "earlier"}],
+        conversation_budget_tokens = 1234, conversation_token_counter = len,
     )
     assert "delegate answer" in out, out
     assert recorded_tools.calls, "the delegate's tool call never reached execute_tool"
@@ -386,6 +388,13 @@ def test_the_execution_context_reaches_the_delegates_tools(rig, monkeypatch, rec
     assert kwargs["disable_sandbox"] is False
     assert kwargs["website_policy"] == {"allow": []}
     assert kwargs["cancel_event"] is cancel, "Stop must reach a long-running tool call"
+    # Pinned individually, not as a group: these three were left unasserted in the
+    # first pass, which put them back in exactly the unguarded shape this whole test
+    # exists to prevent -- deleting all three from the dispatch left the suite green.
+    # They decide which branch turns search_conversation reads and how it budgets them.
+    assert kwargs["conversation_branch"] == [{"role": "user", "content": "earlier"}]
+    assert kwargs["conversation_budget_tokens"] == 1234
+    assert kwargs["conversation_token_counter"] is len
     assert "output_callback" not in kwargs, "the delegate's stdout is not the primary's"
 
 
@@ -529,6 +538,20 @@ def test_a_delegation_that_had_nothing_to_restore_says_what_it_left_loaded(rig):
     assert "repo/Coder:Q4" in out.split("Note:")[-1], "name the model left loaded"
 
 
+def test_nothing_is_reported_as_left_loaded_when_the_delegate_never_loaded(rig):
+    """The other half of the note, and the one that can hand the user a false VRAM
+    report. With nothing resident AND the delegate's load failing, the note's serves()
+    guard is all that stops the result announcing "repo/Coder:Q4 is loaded now and
+    stays loaded" in the same breath as saying it could not be loaded. Running out of
+    VRAM is the ordinary way to reach exactly this pair."""
+    rig.resident = None
+    rig.fail_on = "repo/Coder:Q4"
+    out = _run()
+    assert "could not load repo/Coder:Q4" in out, out
+    assert "stays loaded" not in out, "nothing is loaded; do not claim the delegate is"
+    assert "WARNING" not in out, "there was nothing to put back, so nothing was lost"
+
+
 def test_a_media_role_is_refused_even_when_its_binding_would_resolve(rig, monkeypatch):
     """image and video bindings "record the preference and feed defaults" in v1 --
     they name a media model, and delegation loads onto the CHAT backend. Nothing
@@ -548,8 +571,8 @@ def test_a_media_role_is_refused_even_when_its_binding_would_resolve(rig, monkey
 
 def test_a_delegate_that_died_mid_swap_still_puts_the_model_back(rig, monkeypatch):
     """The other direction, and the expensive one. Three of load()'s raise sites fire
-    AFTER auto-switch has already unloaded the resident model (loader.py:367/:374/
-    :376), and the delegate's launch running out of VRAM is the ordinary way to reach
+    AFTER auto-switch has already unloaded the resident model (loader.py:416/:423/
+    :425), and the delegate's launch running out of VRAM is the ordinary way to reach
     them. A flag set on load()'s return cannot tell "nothing moved" from "moved, then
     failed" -- and getting it wrong the second way loses the user's model in silence:
     no restore attempted, and a result that reads exactly like nothing happened.
