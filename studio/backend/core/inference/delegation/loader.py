@@ -150,13 +150,27 @@ def resident_model_id() -> Optional[str]:
     rather than answer None because None reads as "nothing to put back", and a
     caller acting on that restores nothing and says nothing, which is how a user's
     model gets silently replaced by the delegate's.
+
+    Transformers is checked FIRST, the same order :func:`resident_is_restorable`
+    uses, and the order is load-bearing rather than stylistic. With both backends
+    holding something, restorable answers False because of the Transformers model
+    while a GGUF-first read here answers with the GGUF -- so the refusal built out
+    of this function named the model that WAS restorable and never mentioned the
+    one that blocked it. Two answers to one question is how they drift; the
+    fail-closed one wins.
     """
     try:
-        identity = _gguf_identity()
-        active = None if identity is not None else _transformers_resident()
+        active = _transformers_resident()
+        identity = None if active else _gguf_identity()
         restorable = _resolvable_id(identity) if identity is not None else None
     except BaseException as exc:  # noqa: BLE001 - reported, never swallowed
         raise LoaderError(f"could not read the resident model: {_reason(exc)}") from exc
+    if active:
+        raise LoaderError(
+            f"'{active}' is loaded through Transformers, and delegation can only reload a "
+            "GGUF, so it could not be put back afterwards. Check resident_is_restorable() "
+            "before swapping."
+        )
     if identity is not None:
         if restorable is None:
             raise LoaderError(
@@ -165,12 +179,6 @@ def resident_model_id() -> Optional[str]:
                 "restored after a delegation. Check resident_is_restorable() before swapping."
             )
         return restorable
-    if active:
-        raise LoaderError(
-            f"'{active}' is loaded through Transformers, and delegation can only reload a "
-            "GGUF, so it could not be put back afterwards. Check resident_is_restorable() "
-            "before swapping."
-        )
     return None
 
 
@@ -203,6 +211,47 @@ def resident_is_restorable() -> bool:
         return _resolvable_id(identity) is not None
     except BaseException:  # noqa: BLE001 - fail closed: cannot tell means cannot promise
         return False
+
+
+def resident_is_user_pinned() -> bool:
+    """Whether the loaded model was pinned by an explicit UI load. Never raises.
+
+    ``_loaded_by_user_action`` is set True only by the load route when
+    ``user_initiated`` (routes/inference.py:8648) and read by the idle unloader
+    under "unload API-loaded models only" (llama_keepwarm.py:446), which spares a
+    pinned model indefinitely. Every auto-switch swap clears it
+    (routes/inference.py:6222) -- correct for an API-driven swap, wrong for a
+    delegation's restore, which is putting a hand-loaded model back.
+
+    Bookkeeping, so it never raises and a backend it cannot read reads as unpinned:
+    the worst that costs is the model losing a reprieve it may not have had.
+    """
+    try:
+        return bool(getattr(_llama_backend(), "_loaded_by_user_action", False))
+    except BaseException:  # noqa: BLE001 - bookkeeping must not fail a restore
+        return False
+
+
+def restore_user_pin(pinned: bool) -> None:
+    """Put a user pin back on the loaded model. Never raises.
+
+    Only ever sets the flag True, and only when ``pinned`` says the model being
+    put back had it. Clearing it here is not this function's business: the load
+    the caller just performed has already cleared it, and a False write would
+    un-pin a model some other path pinned in the meantime.
+
+    The caller is responsible for calling this ONLY after a successful restore.
+    Setting it on a backend holding the delegate would tell the idle loop to
+    spare the delegate instead -- the same defect inverted.
+    """
+    if not pinned:
+        return
+    try:
+        backend = _llama_backend()
+        if backend is not None:
+            backend._loaded_by_user_action = True
+    except BaseException:  # noqa: BLE001 - bookkeeping must not fail a restore
+        pass
 
 
 def _request_stand_in() -> types.SimpleNamespace:

@@ -56,6 +56,28 @@ def test_put_rejects_a_non_object_roles_payload(client):
     assert client.put("/api/model-roles", json = {"roles": []}).status_code == 400
 
 
+def test_the_response_says_stored_overrides_are_not_applied(client):
+    """They are validated, stored and echoed back beside `state: ready`, and then
+    nothing reads them: a model loads with its own saved launch settings, through
+    auto-switch. A user who PUTs {"n_ctx": 16384} and gets it back in a 200 has no
+    way to tell that from a setting that took effect."""
+    body = client.put("/api/model-roles", json = {
+        "roles": {"coding": {"model": "m", "overrides": {"n_ctx": 16384}}}
+    }).json()
+    assert body["roles"]["coding"]["overrides"] == {"n_ctx": 16384}, "stored and echoed"
+    assert body["roles"]["coding"]["overrides_applied"] is False
+    assert "not applied" in body["overrides_note"].lower()
+    assert client.get("/api/model-roles").json()["roles"]["coding"]["overrides_applied"] is False
+
+
+def test_both_endpoint_descriptions_say_it_too(client):
+    """The response field only reaches a caller who reads one; the OpenAPI
+    description reaches anyone writing against the API."""
+    paths = client.app.openapi()["paths"]["/api/model-roles"]
+    for method in ("get", "put"):
+        assert "NOT applied" in paths[method]["description"], method
+
+
 def test_both_endpoints_require_authentication(monkeypatch, tmp_path):
     """Control: with no dependency override the real auth dependency runs, and an
     unauthenticated request must not reach the handler."""

@@ -186,6 +186,15 @@ class FakeLoader:
     def resident_is_restorable(self):
         return True
 
+    # The restore re-applies the user's pin, so the loader is asked for it either
+    # side of the swap. Answered here rather than left off: a fake missing part of
+    # the interface fails the delegation with an AttributeError, not a finding.
+    def resident_is_user_pinned(self):
+        return False
+
+    def restore_user_pin(self, pinned):
+        pass
+
     def load(self, model_id, overrides = None):
         self.calls.append(model_id)
         self.resident = model_id

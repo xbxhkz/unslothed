@@ -10089,7 +10089,23 @@ def execute_tool(
         return tool_readiness.execute(name, arguments)
     if name in DELEGATION_TOOL_NAMES:
         from core.inference import delegation
-        return delegation.execute(name, arguments, session_id = session_id, cancel_event = cancel_event)
+        # This is delegation's ONLY caller, so a kwarg missing here can never
+        # reach a delegate's tools however carefully delegation forwards it: it
+        # shipped with session_id and cancel_event alone, and the delegate's
+        # search_knowledge_base answered "No documents are attached to this chat"
+        # in chats that had documents attached. output_callback is deliberately
+        # absent -- the delegate's stdout is not the primary's. See
+        # delegation._TOOL_PASSTHROUGH, which re-forwards exactly this set.
+        return delegation.execute(
+            name, arguments,
+            session_id = session_id, cancel_event = cancel_event,
+            timeout = effective_timeout, thread_id = thread_id,
+            rag_scope = rag_scope, disable_sandbox = disable_sandbox,
+            website_policy = website_policy,
+            conversation_branch = conversation_branch,
+            conversation_budget_tokens = conversation_budget_tokens,
+            conversation_token_counter = conversation_token_counter,
+        )
     if name == "search_knowledge_base":
         return _search_knowledge_base_with_budget(
             arguments,

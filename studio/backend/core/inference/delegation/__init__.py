@@ -26,10 +26,16 @@ failed.
 
 WHAT APPROVING A DELEGATION APPROVES, stated rather than buried. ``ask_model`` is
 not on the classifier's safe lists, so the primary's tool loop prompts for the
-delegation itself: the user approves one role and one task, and the work that
-follows runs inside that approval. Two limits follow from it, both because
-``execute_tool``'s signature (tools.py:10039-10053) carries neither the permission
-mode nor the enabled-tool list, and the only code holding either is the tool loops
+delegation itself -- WHEN that loop prompts at all. The prompt is gated on
+``confirm_tool_calls`` being set, ``bypass_permissions`` being off and
+``permission_mode != "off"`` (studio_tool_loop.py:1141-1145, llama_cpp.py:23928-23936);
+in "auto" mode it is then narrowed to the calls ``is_high_risk_tool_call`` flags,
+which ``ask_model`` is one of. With confirmation switched off there is no approval
+point for this tool, exactly as there is none for ``terminal``. Where it does
+prompt, the user approves one role and one task, and the work that follows runs
+inside that approval. Two limits follow from it, both because ``execute_tool``'s
+signature (tools.py:10041-10055) carries neither the permission mode nor the
+enabled-tool list, and the only code holding either is the tool loops
 -- upstream lines, above this layer, in files this fork does not edit:
 
 * the delegate's individual tool calls are not confirmed separately, so a call
@@ -43,6 +49,22 @@ written transcript of every round, and the sandbox with its blocklist, rlimits a
 secret-stripping still in force underneath -- none of that is approval-gated. It is
 the same shape as approving a ``terminal`` script, which does not re-prompt per
 syscall.
+
+WHY ``ask_model`` IS RE-ADDED TO EVERY STUDIO CHAT, since that re-add's own stated
+bar does not cover it. ``_select_request_tools`` drops any built-in the request did
+not name, and Studio shows no pill for this tool -- exactly as it shows none for
+``check_tool_readiness`` -- so without the ``_addable`` re-add
+(routes/inference.py:3661-3683) ``ask_model`` is registered, dispatched, tested and
+unreachable in the product. This project has shipped that bug three times. The
+comment block there justifies its other entries as read-only, path-free,
+process-free and network-free; ``ask_model`` is none of those -- it swaps the
+loaded model twice and runs an agent that can write files and spawn processes. It
+is re-added regardless, because the alternative is a feature no user can reach,
+and its risk is carried by the approval prompt it triggers rather than by any
+limit on its own reach: it is deliberately absent from ``_ALWAYS_SAFE_TOOLS`` and
+``_ANTHROPIC_UNPROMPTED_SAFE_TOOLS``, so a loop that prompts at all prompts for
+it. The code is there and the reasoning is here because that file is a seam this
+fork keeps as small as it can.
 """
 
 from __future__ import annotations
@@ -67,13 +89,32 @@ DELEGATION_BUSY_MESSAGE = (
     "time, because each one swaps the loaded model out and back. Try again shortly."
 )
 
+# Roles that name a media model rather than a chat model. The spec keeps both
+# informational in v1 -- binding them "records the preference and feeds defaults",
+# and media models auto-switch from the request on their own lane -- so nothing
+# here knows how to talk to one. Without this guard a bound image model that
+# happens to resolve is loaded onto the CHAT backend by load(), the user's own
+# model is unloaded to make room for it, and the delegate is then asked for text
+# it cannot produce. Refused by name, before anything is swapped.
+MEDIA_ONLY_ROLES = frozenset({"image", "video"})
+
 # What is forwarded from the primary's tool call into the delegate's. Collected by
-# name rather than splatted: execute_tool has a closed signature (tools.py:10039),
+# name rather than splatted: execute_tool has a closed signature (tools.py:10041),
 # so one unexpected keyword would raise on every tool call the delegate makes.
 # Deliberately absent: output_callback -- the delegate's stdout would paint onto the
 # primary's ask_model card as if the primary had produced it. cancel_event is absent
 # too, but only because run_subagent takes it as a named parameter of its own and so
 # never forwards it; _delegate_execute_tool binds it instead.
+#
+# This list is only ever as good as its supplier. It shipped inert: the dispatch in
+# tools.py forwarded session_id and cancel_event alone, so this collected {} on every
+# real call and every line below that reads it was dead -- a delegate's
+# search_knowledge_base saw rag_scope = None and answered "No documents are attached
+# to this chat" in chats that had documents attached, search_conversation could never
+# find anything, and delegate audit rows carried a delegation_id with a NULL
+# thread_id. The dispatch now forwards this exact set; the two must be changed
+# together, and the test that pins it drives the real tools.execute_tool rather than
+# calling into this module with kwargs no caller supplies.
 _TOOL_PASSTHROUGH = (
     "timeout", "thread_id", "rag_scope", "disable_sandbox", "website_policy",
     "conversation_branch", "conversation_budget_tokens", "conversation_token_counter",
@@ -288,6 +329,12 @@ def _delegate(arguments, *, session_id = None, cancel_event = None, **kwargs) ->
         return "Error: ask_model needs a role."
     if not task:
         return "Error: ask_model needs a task, written so it stands alone."
+    if model_roles.normalize_role(role) in MEDIA_ONLY_ROLES:
+        return (
+            f"Error: the {role!r} role is not a chat model. Image and video bindings only "
+            "record a preference and feed defaults to the media pipelines; delegation "
+            "loads a chat model and asks it for text. Delegate to a text role instead."
+        )
 
     state = model_roles.availability(role)
     if state.state != READY:
@@ -320,6 +367,10 @@ def _delegate(arguments, *, session_id = None, cancel_event = None, **kwargs) ->
     # Only a backstop now: resident_is_restorable() above already refused the two
     # states this raises in.
     resident = _loader.resident_model_id()
+    # Captured beside the resident id, because it is part of the same answer to
+    # "what was the user's model": whether they pinned it by loading it by hand.
+    # Re-applied by _restore, and only there. See loader.restore_user_pin.
+    resident_pinned = _loader.resident_is_user_pinned()
     files = workspace.create(session_id, role)
     # The brief's text comes back from the writer, not from re-reading the file.
     # write_brief is never-raises by design, so a delegate prompt built by opening
@@ -368,7 +419,7 @@ def _delegate(arguments, *, session_id = None, cancel_event = None, **kwargs) ->
         body = f"Error: the {role} model failed: {exc}"
     finally:
         _active.delegation_id = None
-        restore_note = _restore(resident)
+        restore_note = _restore(resident, pinned = resident_pinned, delegate = binding.model)
     return body if not restore_note else f"{body}\n\n{restore_note}"
 
 
@@ -389,7 +440,9 @@ def _delegate_system_prompt(role: str, paths: dict) -> str:
     )
 
 
-def _restore(resident: Optional[str]) -> str:
+def _restore(
+    resident: Optional[str], *, pinned: bool = False, delegate: Optional[str] = None
+) -> str:
     """Put back what was loaded, unless it never left.
 
     Asked of the loader rather than inferred from how far load() got: three of its
@@ -401,7 +454,7 @@ def _restore(resident: Optional[str]) -> str:
     A failure here is reported, never swallowed: otherwise the next turn runs on a
     different model than the user believes."""
     if not resident:
-        return ""
+        return _left_loaded_note(delegate)
     try:
         if _loader.serves(resident):
             return ""
@@ -409,12 +462,47 @@ def _restore(resident: Optional[str]) -> str:
         pass
     try:
         _loader.load(resident)
-        return ""
     except BaseException as exc:  # noqa: BLE001
         return (
             f"WARNING: could not reload {resident} after the delegation ({exc}). "
             f"The model now loaded is not the one you were using."
         )
+    # Only after a load that RETURNED, and never on the path above where the model
+    # never left: this writes provenance onto whatever the backend now holds, and
+    # on a failed restore that is the delegate.
+    #
+    # The restore reuses auto-switch on purpose -- one swap protocol, no second
+    # conversion path -- and inherits a line written for the case it was built for:
+    # routes/inference.py:6222 clears _loaded_by_user_action after every swap it
+    # performs, because a model an API request brought in is API-loaded. Putting a
+    # hand-loaded model back is the one case where that is wrong, and it is invisible
+    # when it bites: under "unload API-loaded models only" the idle loop stops
+    # sparing the user's model, unloads it minutes later, and the next message pays
+    # a cold load with nothing tying it to the delegation that caused it.
+    _loader.restore_user_pin(pinned)
+    return ""
+
+
+def _left_loaded_note(delegate: Optional[str]) -> str:
+    """What a delegation left behind when nothing was loaded before it. Never raises.
+
+    "Nothing was loaded before" and "nothing needs putting back" are not the same
+    thing. A chat on an external provider delegates to a local role, a
+    multi-gigabyte GGUF is loaded for it, and it stays loaded for the life of the
+    process -- on a 6 GB card that is the whole VRAM budget, spent invisibly. Not a
+    WARNING, because nothing was lost; a plain line naming the model, because the
+    only other place it shows is the model picker."""
+    if not delegate:
+        return ""
+    try:
+        if not _loader.serves(delegate):
+            return ""
+    except BaseException:  # noqa: BLE001 - a note must never fail a delegation
+        return ""
+    return (
+        f"Note: no model was loaded before this delegation, so nothing was put back -- "
+        f"{delegate} is loaded now and stays loaded until something else replaces it."
+    )
 
 
 def _delegate_tools() -> list:

@@ -35,11 +35,19 @@ _REAL_CALL_MODEL_FOR = delegation._call_model_for
 
 
 class FakeLoader:
-    def __init__(self, resident = "repo/Primary:Q4", fail_on = None, restorable = True):
+    def __init__(self, resident = "repo/Primary:Q4", fail_on = None, restorable = True,
+                 pinned = False):
         self.resident = resident
         self.fail_on = fail_on
         self.restorable = restorable
+        # _loaded_by_user_action: True when the user loaded this model from the
+        # picker by hand. The idle unloader spares a pinned model under "unload
+        # API-loaded models only".
+        self.pinned = pinned
         self.calls = []
+        # (model_id, pinned) as each load leaves it, so a test can see the pin go
+        # down on the delegate's load and come back up on the restore.
+        self.pin_trail = []
         self.resident_reads = 0
 
     def resident_model_id(self):
@@ -54,11 +62,23 @@ class FakeLoader:
     def resident_is_restorable(self):
         return self.restorable
 
+    def resident_is_user_pinned(self):
+        return self.pinned
+
+    def restore_user_pin(self, pinned):
+        """Only ever sets it, exactly as the real helper does."""
+        if pinned:
+            self.pinned = True
+
     def load(self, model_id, overrides = None):
         self.calls.append(model_id)
         if self.fail_on is not None and model_id == self.fail_on:
             raise delegation._loader_error("could not load " + model_id)
         self.resident = model_id
+        # What routes/inference.py:6222 does after every swap auto-switch performs:
+        # the model now loaded came from an API request, so it is not user-pinned.
+        self.pinned = False
+        self.pin_trail.append((model_id, self.pinned))
 
 
 @pytest.fixture
@@ -76,20 +96,34 @@ def rig(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def fake_tools(monkeypatch):
-    """core.inference.tools with the executor replaced by a recorder.
+def recorded_tools(tmp_path, monkeypatch):
+    """The REAL tools.execute_tool, with every tool but ``ask_model`` recorded.
 
-    No test may run a real tool, so this one only records what it was handed.
+    No test may run a real tool, so ``_execute_tool_unaudited`` -- the body the
+    audit shadow calls, looked up as a module global on every call -- is replaced
+    with a recorder that lets exactly one name through: ``ask_model``, the
+    dispatch under test. Everything else is recorded and answered with a string.
+
+    The audit shadow runs for real, so the audit DB is pointed at tmp_path.
     """
     import core.inference.tools as tools_module
+    from core.inference import tool_audit
+    from storage import tool_audit_db
 
+    monkeypatch.setenv("UNSLOTH_STUDIO_HOME", str(tmp_path))
+    tool_audit_db.reset_for_tests()
+    tool_audit.reset_degraded_for_tests()
+
+    dispatch = tools_module._execute_tool_unaudited
     seen = types.SimpleNamespace(calls = [])
 
-    def execute_tool(name, arguments, **kwargs):
+    def recorder(name, arguments, **kwargs):
+        if name == "ask_model":
+            return dispatch(name, arguments, **kwargs)
         seen.calls.append((name, arguments, kwargs))
         return f"ran {name}"
 
-    monkeypatch.setattr(tools_module, "execute_tool", execute_tool)
+    monkeypatch.setattr(tools_module, "_execute_tool_unaudited", recorder)
     return seen
 
 
@@ -212,7 +246,15 @@ def test_the_delegate_keeps_working_while_it_is_still_resident(rig, monkeypatch)
 
 
 def test_a_nested_delegation_is_refused(rig, monkeypatch):
-    """Depth guard: the delegate must not delegate."""
+    """Depth guard: the delegate must not delegate.
+
+    Asserted on the depth guard's OWN wording. The first version accepted
+    "already" or "nested", and deleting the depth guard left every test passing:
+    the nested call simply fell through to the process-wide gate, whose refusal
+    ("another conversation is already delegating") also contains "already". The
+    control the spec's testing table names was therefore never achievable. Only
+    the depth guard says "cannot delegate again".
+    """
     inner = {}
 
     def call_model(messages, tools):
@@ -221,7 +263,9 @@ def test_a_nested_delegation_is_refused(rig, monkeypatch):
 
     monkeypatch.setattr(delegation, "_call_model_for", lambda binding: call_model)
     _run()
-    assert "already" in inner["out"].lower() or "nested" in inner["out"].lower()
+    assert "cannot delegate again" in inner["out"].lower(), inner["out"]
+    assert delegation.DELEGATION_BUSY_MESSAGE not in inner["out"], \
+        "the process-wide gate's refusal is not evidence that the depth guard fired"
 
 
 def test_the_delegate_is_not_given_the_delegation_tool(rig, monkeypatch):
@@ -284,12 +328,19 @@ def test_cancellation_is_passed_to_the_sub_agent(rig, monkeypatch):
 
 
 def test_the_tool_description_says_the_delegates_calls_are_not_confirmed(rig):
-    """The delegate's calls are not individually approved -- the primary's loop
-    prompts once, for the delegation. That is the disclosure the user reads on the
-    approval card and the model reads when deciding to call this at all, so it lives
-    in the description rather than only in a docstring."""
+    """Both halves of the disclosure, because both are what the approval card says.
+
+    The delegate's calls are not individually approved -- the primary's loop prompts
+    once, for the delegation. And the delegate gets the server's whole tool set, not
+    the pills this conversation left switched on: the description used to claim the
+    opposite ("the same tools this conversation has") while the module docstring had
+    it right, so the card understated what was being approved."""
     description = ASK_MODEL_TOOL["function"]["description"]
     assert "not confirmed separately" in description
+    assert "full tool set" in description
+    assert "not the tools switched on in this conversation" in description
+    assert "same tools this conversation has" not in description, \
+        "the sentence that said the opposite of what ships"
 
 
 def test_the_delegate_is_told_its_files_are_the_whole_record(rig):
@@ -301,19 +352,33 @@ def test_the_delegate_is_told_its_files_are_the_whole_record(rig):
     assert "on behalf of another model" in prompt
 
 
-def test_the_execution_context_reaches_the_delegates_tools(rig, monkeypatch, fake_tools):
-    """_execute swallowed every kwarg but session_id, so a delegate's tools ran
-    with no timeout, no thread id, no RAG scope and no cancel event."""
+def test_the_execution_context_reaches_the_delegates_tools(rig, monkeypatch, recorded_tools):
+    """Driven through the REAL tools.execute_tool, which is the only production
+    caller and is exactly where this broke.
+
+    The first version of this test called delegation.execute(...) directly with
+    the full kwarg set. No caller supplies that: the dispatch in tools.py
+    forwarded session_id and cancel_event and nothing else, so _TOOL_PASSTHROUGH
+    collected {} on every real call and every line that reads it was dead. A
+    delegate briefed to consult the chat's attached manual called
+    search_knowledge_base, got rag_scope = None and was told "No documents are
+    attached to this chat" -- in a chat with documents attached. The test passed
+    the whole time, because it was the only caller that ever passed the kwargs.
+    """
+    import core.inference.tools as tools_module
+
     monkeypatch.setattr(delegation, "_call_model_for",
                         lambda binding: _one_tool_call("read_file", {"path": "a.txt"}))
     cancel = threading.Event()
-    delegation.execute(
+    out = tools_module.execute_tool(
         "ask_model", {"role": "coding", "task": "t"},
         session_id = "s1", cancel_event = cancel, thread_id = "t1",
         rag_scope = {"mode": "dense"}, timeout = 42, disable_sandbox = False,
         website_policy = {"allow": []}, output_callback = lambda chunk: None,
     )
-    _name, _arguments, kwargs = fake_tools.calls[0]
+    assert "delegate answer" in out, out
+    assert recorded_tools.calls, "the delegate's tool call never reached execute_tool"
+    _name, _arguments, kwargs = recorded_tools.calls[0]
     assert kwargs["session_id"] == "s1"
     assert kwargs["thread_id"] == "t1"
     assert kwargs["rag_scope"] == {"mode": "dense"}
@@ -424,6 +489,61 @@ def test_a_delegate_that_never_loaded_is_not_reported_as_a_lost_model(rig):
     assert rig.calls == ["repo/Coder:Q4"], "the restore must not even be attempted"
     assert "WARNING" not in out, "nothing was swapped, so nothing was lost"
     assert "could not load repo/Coder:Q4" in out
+
+
+def test_a_delegation_does_not_un_pin_the_users_own_model(rig):
+    """The one defect whose damage lands AFTER the delegation reports success.
+
+    The restore goes through auto-switch, which clears _loaded_by_user_action on
+    every swap it performs -- right for an API-driven swap, wrong for putting a
+    hand-loaded model back. With "unload API-loaded models only" on and an idle TTL
+    set, the idle loop had been sparing the user's model; after one delegation it
+    quietly stops, unloads it minutes later, and the next message pays a cold load
+    with nothing connecting it to the delegation that caused it."""
+    rig.pinned = True
+    _run()
+    assert rig.pin_trail == [("repo/Coder:Q4", False), ("repo/Primary:Q4", False)], \
+        "the premise: both loads clear the pin, the delegate's included"
+    assert rig.pinned is True, "the user's model must come back pinned as they left it"
+
+
+def test_a_model_that_was_not_pinned_is_not_pinned_by_the_restore(rig):
+    """The other direction: restore_user_pin only ever SETS the flag, so a model
+    that was API-loaded must not come back looking hand-loaded and start being
+    spared by an idle unloader scoped to API loads."""
+    rig.pinned = False
+    _run()
+    assert rig.pinned is False
+
+
+def test_a_delegation_that_had_nothing_to_restore_says_what_it_left_loaded(rig):
+    """"Nothing was loaded before" and "nothing needs putting back" are not the same
+    thing. A chat on an external provider delegates, a multi-gigabyte GGUF is loaded
+    for the delegate, and it stays resident for the life of the process -- on a 6 GB
+    card that is the whole VRAM budget, spent with nothing in the result saying so."""
+    rig.resident = None
+    out = _run()
+    assert rig.calls == ["repo/Coder:Q4"], "there was nothing to put back"
+    assert "WARNING" not in out, "nothing was lost, so this is not a warning"
+    assert "nothing was put back" in out and "stays loaded" in out, out
+    assert "repo/Coder:Q4" in out.split("Note:")[-1], "name the model left loaded"
+
+
+def test_a_media_role_is_refused_even_when_its_binding_would_resolve(rig, monkeypatch):
+    """image and video bindings "record the preference and feed defaults" in v1 --
+    they name a media model, and delegation loads onto the CHAT backend. Nothing
+    stopped ask_model targeting one, so a bound image model that happened to resolve
+    would unload the user's chat model to make room for something that cannot answer
+    a task at all."""
+    monkeypatch.setattr(storage, "get_role_bindings", lambda: {
+        "image": {"model": "repo/Flux:Q4"},
+        "video": {"model": "repo/Wan:Q4"},
+        "primary": {"model": "repo/Other:Q4"},
+    })
+    for role in ("image", "VIDEO "):
+        out = _run(role = role)
+        assert rig.calls == [], "the chat backend must not be swapped to a media model"
+        assert "not a chat model" in out, out
 
 
 def test_a_delegate_that_died_mid_swap_still_puts_the_model_back(rig, monkeypatch):

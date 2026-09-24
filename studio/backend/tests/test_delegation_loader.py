@@ -485,6 +485,21 @@ def test_a_transformers_model_does_not_read_as_nothing_loaded(monkeypatch):
     assert "unsloth/Llama-3.2-1B-Instruct" in str(excinfo.value)
 
 
+def test_both_backends_loaded_names_the_one_that_blocks_the_restore(monkeypatch):
+    """The two functions used to walk the backends in opposite orders --
+    resident_is_restorable Transformers first, resident_model_id GGUF first -- so
+    with both loaded the refusal delegation builds out of resident_model_id named
+    the model that IS restorable and never mentioned the one that blocked it."""
+    _install_route(monkeypatch, _loaded(_PATH, hf_variant = "Q4_K_M", advertised = _REPO))
+    _install_orchestrator(monkeypatch, "unsloth/Llama-3.2-1B-Instruct")
+    assert loader.resident_is_restorable() is False, "the Transformers model blocks it"
+    with pytest.raises(loader.LoaderError) as excinfo:
+        loader.resident_model_id()
+    message = str(excinfo.value)
+    assert "unsloth/Llama-3.2-1B-Instruct" in message, "name what blocked the restore"
+    assert _REPO not in message, "naming the restorable GGUF here is the bug"
+
+
 def test_a_resident_gguf_is_restorable(monkeypatch):
     _install_route(monkeypatch, _loaded(_PATH, hf_variant = "Q4_K_M", advertised = _REPO))
     assert loader.resident_is_restorable() is True
@@ -505,6 +520,52 @@ def test_an_unreadable_backend_is_not_restorable(monkeypatch):
     module.peek_inference_backend = peek_inference_backend
     monkeypatch.setitem(sys.modules, "core.inference.orchestrator", module)
     assert loader.resident_is_restorable() is False
+
+
+# ── the user pin, which the restore inherits a line that clears ─────────
+
+
+def test_the_user_pin_is_read_off_the_backend_and_put_back(monkeypatch):
+    """_loaded_by_user_action is what "unload API-loaded models only" spares a
+    model by (llama_keepwarm.py:446), and auto-switch clears it on every swap it
+    performs (routes/inference.py:6222) -- including delegation's restore, which is
+    putting a HAND-loaded model back."""
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_REPO))
+    state.backend._loaded_by_user_action = True
+    assert loader.resident_is_user_pinned() is True
+
+    state.backend._loaded_by_user_action = False  # what the restore's swap leaves
+    loader.restore_user_pin(True)
+    assert state.backend._loaded_by_user_action is True
+
+
+def test_restoring_a_model_that_was_not_pinned_never_pins_it(monkeypatch):
+    """The helper only ever SETS the flag. Writing False would un-pin whatever the
+    backend holds, and writing True unconditionally would tell the idle unloader to
+    spare a model the user never loaded by hand."""
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_REPO))
+    state.backend._loaded_by_user_action = False
+    assert loader.resident_is_user_pinned() is False
+    loader.restore_user_pin(False)
+    assert state.backend._loaded_by_user_action is False
+
+
+def test_the_pin_helpers_never_raise(monkeypatch):
+    """Bookkeeping either side of a restore: a backend they cannot read must cost
+    the user a reprieve, never the restore itself."""
+    monkeypatch.delitem(sys.modules, "routes.inference", raising = False)
+    assert loader.resident_is_user_pinned() is False
+    loader.restore_user_pin(True)  # must not raise
+
+    module = types.ModuleType("routes.inference")
+
+    def get_llama_cpp_backend():
+        raise RuntimeError("backend is mid-teardown")
+
+    module.get_llama_cpp_backend = get_llama_cpp_backend
+    monkeypatch.setitem(sys.modules, "routes.inference", module)
+    assert loader.resident_is_user_pinned() is False
+    loader.restore_user_pin(True)  # must not raise
 
 
 # ── the fakes themselves ────────────────────────────────────────────────
