@@ -18,6 +18,7 @@ import { MonitorLink } from "../components/monitor-link";
 import { ApiKeyRow } from "../components/api-key-row";
 import { CreateKeyForm } from "../components/create-key-form";
 import { ModelAutoSwitchSection } from "../components/model-auto-switch-section";
+import { ModelRolesSection } from "../components/model-roles-section";
 import { KeyRevealCard } from "../components/key-reveal-card";
 import { LanAccessSection } from "../components/lan-access-section";
 import { RemoteAccessSection } from "../components/remote-access-section";
@@ -179,6 +180,10 @@ export function ApiKeysTab() {
       <LanAccessSection />
 
       <ModelAutoSwitchSection />
+
+      {/* Directly below auto-switch, because delegation depends on it: ask_model
+          refuses outright when "Switch model by request" is off. */}
+      <ModelRolesSection />
 
       <UsageExamples apiKey={revealed} />
 

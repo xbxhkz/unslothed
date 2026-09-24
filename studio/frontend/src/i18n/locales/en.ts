@@ -421,6 +421,24 @@ export const en = {
         notSupported: "Not supported in this browser",
       },
     },
+    modelRoles: {
+      title: "Model roles",
+      description:
+        "Bind a model to each role. A model in chat can hand a task to another role's model with ask_model, which loads it, lets it work, and loads your model back. Needs Switch model by request, above.",
+      noModel: "Not bound",
+      unbound: "No model bound to this role yet.",
+      notDelegatable:
+        "Records a preference and feeds defaults. ask_model will not delegate to it, because a delegation loads onto the chat backend.",
+      modelForRole: "Model for the {role} role",
+      loadFailed:
+        "Could not read the role bindings. Nothing has been changed — saving now could replace the bindings you cannot see.",
+      saved: "Saved",
+      state: {
+        ready: "Ready",
+        missing: "Not downloaded",
+        unknown: "Not checked",
+      },
+    },
     general: {
       title: "General",
       description: "Global preferences for Unslothed.",
