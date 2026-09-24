@@ -238,6 +238,27 @@ def test_the_delegate_is_not_given_the_delegation_tool(rig, monkeypatch):
     assert names == ["read_file"]
 
 
+def test_the_delegate_is_not_given_the_delegation_tool_for_real():
+    """The same rule against the REAL registry. Task 8 registered ask_model, so
+    the filter now has something to remove -- until then the test above ran
+    against a fake and could not fail. The faked one stays: it pins the filter's
+    logic independently of what the registry happens to hold."""
+    from core.inference.tools import ALL_TOOLS
+
+    names = {t["function"]["name"] for t in delegation._delegate_tools()}
+    assert "ask_model" in {t["function"]["name"] for t in ALL_TOOLS}, "not registered"
+    assert "ask_model" not in names
+    assert "terminal" in names, "the delegate still gets the ordinary tools"
+
+
+def test_the_delegate_gets_the_registry_minus_exactly_one():
+    """'Everything except ask_model' as a fact rather than a comment: it fails
+    loudly if a future tool is accidentally filtered out too."""
+    from core.inference.tools import ALL_TOOLS
+
+    assert len(delegation._delegate_tools()) == len(ALL_TOOLS) - 1
+
+
 def test_the_window_cap_refuses_a_third_delegation(rig):
     _run()
     _run()

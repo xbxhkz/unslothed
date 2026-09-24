@@ -9840,6 +9840,7 @@ SEARCH_CONVERSATION_TOOL = {
 from core.inference.assist_vision import ASSIST_VISION_TOOLS, ASSIST_VISION_TOOL_NAMES
 from core.inference.assist_code import ASSIST_CODE_TOOLS, ASSIST_CODE_TOOL_NAMES
 from core.inference.tool_readiness.schemas import READINESS_TOOLS, READINESS_TOOL_NAMES
+from core.inference.delegation.schemas import DELEGATION_TOOLS, DELEGATION_TOOL_NAMES
 
 ALL_TOOLS = [
     WEB_SEARCH_TOOL,
@@ -9852,6 +9853,7 @@ ALL_TOOLS = [
     *ASSIST_VISION_TOOLS,
     *ASSIST_CODE_TOOLS,
     *READINESS_TOOLS,
+    *DELEGATION_TOOLS,
 ]
 
 
@@ -10085,6 +10087,9 @@ def execute_tool(
     if name in READINESS_TOOL_NAMES:
         from core.inference import tool_readiness
         return tool_readiness.execute(name, arguments)
+    if name in DELEGATION_TOOL_NAMES:
+        from core.inference import delegation
+        return delegation.execute(name, arguments, session_id = session_id, cancel_event = cancel_event)
     if name == "search_knowledge_base":
         return _search_knowledge_base_with_budget(
             arguments,
