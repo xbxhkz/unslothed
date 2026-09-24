@@ -80,6 +80,13 @@ _TOOL_PASSTHROUGH = (
 )
 
 _loader = _loader_module
+# A thread-local, not a contextvar, and that is load-bearing rather than incidental.
+# run_subagent executes the delegate's tool calls INLINE (subagent.py:84), and the
+# delegate's executor bypasses stream_tool_execution, so the audit recorder reads this
+# on the same thread _delegate wrote it on. If a future executor ever hands tool calls
+# to a worker thread, attribution silently becomes None -- a delegate's call filed as
+# the primary's, which is the exact confusion the delegation_id column exists to
+# prevent. Move it to a contextvar before making that change, not after.
 _active = threading.local()
 _recent: dict[str, list[float]] = {}
 _recent_guard = threading.Lock()

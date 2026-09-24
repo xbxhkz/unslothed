@@ -76,7 +76,21 @@ def _connect() -> Iterator[sqlite3.Connection]:
             # storage/rag_db.py:300-302 uses.
             columns = {r[1] for r in conn.execute("PRAGMA table_info(tool_audit)").fetchall()}
             if columns and "delegation_id" not in columns:
-                conn.execute("ALTER TABLE tool_audit ADD COLUMN delegation_id TEXT")
+                try:
+                    conn.execute("ALTER TABLE tool_audit ADD COLUMN delegation_id TEXT")
+                except sqlite3.OperationalError:
+                    # This block is not locked, and two agentic loops issuing their
+                    # first tool calls concurrently on the first start after an
+                    # upgrade both read the column list before either commits. The
+                    # loser's ALTER fails with "duplicate column name" -- on a schema
+                    # that is by then already correct. Left unhandled it would
+                    # propagate into around()'s guard, losing that call's audit row
+                    # and latching degraded = true for the rest of the process: a
+                    # false alarm on the one surface whose whole value is being
+                    # trustworthy. The DDL above was pure idempotent CREATE IF NOT
+                    # EXISTS before this column; the ALTER is what made the missing
+                    # lock consequential.
+                    pass
             conn.commit()
             _SCHEMA_READY = True
         yield conn

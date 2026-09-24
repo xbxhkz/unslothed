@@ -104,9 +104,19 @@ def test_the_session_id_is_unchanged_by_a_delegation():
 def test_a_broken_attribution_lookup_still_records_the_row():
     """Never-raises, at the one seam this task adds. Attribution is decoration on
     a row that has to be written either way -- a tool call must not lose its audit
-    record because the delegation module could not be asked."""
+    record because the delegation module could not be asked.
+
+    Raises a BaseException that is NOT an Exception, deliberately. With a
+    RuntimeError here the test passed with the guard narrowed to
+    ``except Exception``, so it proved only that some guard existed -- and the
+    narrowing is behaviourally real: the row is lost and the degraded counter
+    fires. This is the project's bare-except rule, so the test has to be able to
+    see it broken."""
+    class _Abort(BaseException):
+        pass
+
     def explode():
-        raise RuntimeError("delegation module is unimportable")
+        raise _Abort("delegation module is unimportable")
 
     original = delegation.active_delegation_id
     delegation.active_delegation_id = explode
