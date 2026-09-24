@@ -61,6 +61,22 @@ def _note_failure(what: str, exc: BaseException) -> None:
     logger.warning("tool audit %s failed (%s); tool execution unaffected", what, exc)
 
 
+def _active_delegation_id() -> Any:
+    """The delegation running on this thread, if any.
+
+    Never raises: attribution is decoration on a row that has to be written
+    either way, so a tool call must not lose its audit record -- nor its result --
+    because the delegation module could not be asked. Bare except for the reason
+    in the module docstring.
+    """
+    try:
+        from core.inference import delegation
+
+        return delegation.active_delegation_id()
+    except BaseException:  # noqa: BLE001 - never-raises; see module docstring
+        return None
+
+
 def _mcp_result_must_be_withheld(name: Any, arguments: Any) -> bool:
     """Redaction layer 1: true when ``name`` is an MCP-prefixed tool call whose
     arguments name a credential path, a secret environment variable, or a
@@ -154,6 +170,9 @@ def around(fn: Callable[..., str], *args: Any, **kwargs: Any) -> str:
             # themselves redacted clean -- a withheld result is never "clean".
             redacted = redacted or withhold,
             session_id = kwargs.get("session_id"),
+            # Attribution only: session_id is deliberately left alone, because
+            # approvals are keyed by it.
+            delegation_id = _active_delegation_id(),
             thread_id = kwargs.get("thread_id"),
             disable_sandbox = bool(kwargs.get("disable_sandbox", False)),
         )

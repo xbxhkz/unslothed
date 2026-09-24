@@ -9840,6 +9840,7 @@ SEARCH_CONVERSATION_TOOL = {
 from core.inference.assist_vision import ASSIST_VISION_TOOLS, ASSIST_VISION_TOOL_NAMES
 from core.inference.assist_code import ASSIST_CODE_TOOLS, ASSIST_CODE_TOOL_NAMES
 from core.inference.tool_readiness.schemas import READINESS_TOOLS, READINESS_TOOL_NAMES
+from core.inference.delegation.schemas import DELEGATION_TOOLS, DELEGATION_TOOL_NAMES
 
 ALL_TOOLS = [
     WEB_SEARCH_TOOL,
@@ -9852,6 +9853,7 @@ ALL_TOOLS = [
     *ASSIST_VISION_TOOLS,
     *ASSIST_CODE_TOOLS,
     *READINESS_TOOLS,
+    *DELEGATION_TOOLS,
 ]
 
 
@@ -10085,6 +10087,25 @@ def execute_tool(
     if name in READINESS_TOOL_NAMES:
         from core.inference import tool_readiness
         return tool_readiness.execute(name, arguments)
+    if name in DELEGATION_TOOL_NAMES:
+        from core.inference import delegation
+        # This is delegation's ONLY caller, so a kwarg missing here can never
+        # reach a delegate's tools however carefully delegation forwards it: it
+        # shipped with session_id and cancel_event alone, and the delegate's
+        # search_knowledge_base answered "No documents are attached to this chat"
+        # in chats that had documents attached. output_callback is deliberately
+        # absent -- the delegate's stdout is not the primary's. See
+        # delegation._TOOL_PASSTHROUGH, which re-forwards exactly this set.
+        return delegation.execute(
+            name, arguments,
+            session_id = session_id, cancel_event = cancel_event,
+            timeout = effective_timeout, thread_id = thread_id,
+            rag_scope = rag_scope, disable_sandbox = disable_sandbox,
+            website_policy = website_policy,
+            conversation_branch = conversation_branch,
+            conversation_budget_tokens = conversation_budget_tokens,
+            conversation_token_counter = conversation_token_counter,
+        )
     if name == "search_knowledge_base":
         return _search_knowledge_base_with_budget(
             arguments,

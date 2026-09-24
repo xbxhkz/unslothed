@@ -3672,8 +3672,9 @@ async def _select_request_tools(
             ASSIST_VISION_TOOL_NAMES,
             ASSIST_CODE_TOOL_NAMES,
             READINESS_TOOL_NAMES,
+            DELEGATION_TOOL_NAMES,
         )
-        _addable = ASSIST_VISION_TOOL_NAMES | ASSIST_CODE_TOOL_NAMES | READINESS_TOOL_NAMES
+        _addable = ASSIST_VISION_TOOL_NAMES | ASSIST_CODE_TOOL_NAMES | READINESS_TOOL_NAMES | DELEGATION_TOOL_NAMES
         _already = {t["function"]["name"] for t in tools}
         tools = tools + [
             t for t in ALL_TOOLS

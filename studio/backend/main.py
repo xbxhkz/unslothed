@@ -331,6 +331,7 @@ from hub.utils.download_registry import (
 )
 from routes.draft_model import router as draft_model_router
 from routes.tool_audit import router as tool_audit_router
+from routes.model_roles import router as model_roles_router
 from routes.settings import router as settings_router
 from routes.prompts import router as prompts_router
 from routes.profile_stats import router as profile_stats_router
@@ -1388,6 +1389,7 @@ app.include_router(hub_token_router, prefix = "/api/hub", tags = ["hub"])
 app.include_router(youtube_router, prefix = "/api/youtube", tags = ["youtube"])
 app.include_router(draft_model_router, prefix = "/api/draft-model", tags = ["draft-model"])
 app.include_router(tool_audit_router, prefix = "/api/tool-audit", tags = ["tool-audit"])
+app.include_router(model_roles_router, prefix = "/api/model-roles", tags = ["model-roles"])
 
 # Re-wrap /v1/* client errors into OpenAI/Anthropic envelopes; non-/v1 keeps {"detail": ...}.
 install_api_error_handlers(app)

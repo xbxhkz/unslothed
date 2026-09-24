@@ -1,0 +1,601 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright 2026-present the Unsloth AI Inc. team. All rights reserved. See /studio/LICENSE.AGPL-3.0
+
+"""The swap adapter.
+
+No test here loads a model, starts llama-server, or imports the real route
+module. What IS tested is the wiring: that the adapter drives the route's whole
+auto-switch protocol instead of the loader underneath it, that it refuses when
+auto-switch is off, that it proves the swap actually happened, and that the
+resident id it reports is one it can take back.
+
+Every fake has an explicit signature -- no ``**kwargs`` -- and the auto-switch
+fake's is checked against the real function's. The first version of this adapter
+called ``_load_model_impl`` without ``current_request_counted = True``, so every
+real swap hung on the drain forever; the fake's ``**kwargs`` swallowed exactly
+that argument, and no test could see it.
+"""
+
+from __future__ import annotations
+
+import ast
+import inspect
+import sys
+import types
+from pathlib import Path
+
+import pytest
+
+import core.inference.local_model_resolver as local_model_resolver
+from core.inference.delegation import loader
+
+# A stand-in for the local GGUF index, in the shape resolve_local_gguf returns:
+# (load_path, gguf_variant, loader_id). One repo cached with two quants, and a
+# second repo, so a swap has somewhere to go.
+_REPO = "unsloth/Qwen3-4B-GGUF"
+_PATH = r"C:\hf-cache\models--unsloth--Qwen3-4B-GGUF\snapshots\aaaa"
+_OTHER_REPO = "unsloth/Qwen3-30B-GGUF"
+_OTHER_PATH = r"C:\hf-cache\models--unsloth--Qwen3-30B-GGUF\snapshots\bbbb"
+
+# A standalone .gguf, as ./models and the LM Studio scanners index one: keyed by
+# its path and its path-free alias, and carrying NO variants -- a single file has
+# no quant to sub-select. Its ":QUANT" form therefore misses, exactly as it does
+# in the real index (verified against _resolve_from_index), while the backend that
+# loaded it still reports hf_variant, parsed out of the filename.
+_FILE = r"C:\models\llama-3-8b.Q4_K_M.gguf"
+_FILE_ALIAS = "llama-3-8b.Q4_K_M"
+
+_INDEX = {
+    "unsloth/qwen3-4b-gguf": (_PATH, "Q4_K_M", _REPO),
+    "unsloth/qwen3-4b-gguf:q4_k_m": (_PATH, "Q4_K_M", _REPO),
+    "unsloth/qwen3-4b-gguf:q8_0": (_PATH, "Q8_0", _REPO),
+    "unsloth/qwen3-30b-gguf": (_OTHER_PATH, "Q4_K_M", _OTHER_REPO),
+    "unsloth/qwen3-30b-gguf:q4_k_m": (_OTHER_PATH, "Q4_K_M", _OTHER_REPO),
+    _PATH.lower(): (_PATH, "Q4_K_M", _REPO),
+    _FILE.lower(): (_FILE, None, _FILE_ALIAS),
+    _FILE_ALIAS.lower(): (_FILE, None, _FILE_ALIAS),
+}
+
+
+def _resolve_local_gguf(requested, *, allow_scan = True):
+    """The real resolver's signature, answering from the table above."""
+    if not isinstance(requested, str):
+        return None
+    return _INDEX.get(requested.strip().lower())
+
+
+def _loaded(model_identifier, hf_variant = None, advertised = None, is_loaded = True):
+    """A llama.cpp backend as the route's one looks to a reader: the attributes
+    llama_keepwarm._loaded_identity and auto-switch's _already_serving read."""
+    return types.SimpleNamespace(
+        is_loaded = is_loaded,
+        model_identifier = model_identifier,
+        hf_variant = hf_variant,
+        _openai_advertised_id = advertised,
+    )
+
+
+def _loaded_by_auto_switch(model_id):
+    """The backend state a real auto-switch load leaves behind for *model_id*:
+    the concrete load path as the identifier, the repo id advertised, and the
+    resolved quant. None when the id resolves to nothing local."""
+    resolved = _resolve_local_gguf(model_id)
+    if resolved is None:
+        return None
+    load_path, variant, override_id = resolved
+    return _loaded(load_path, hf_variant = variant, advertised = override_id)
+
+
+def _install_route(monkeypatch, backend, *, swaps = True, switch_error = None):
+    """A fake ``routes.inference`` carrying both entry points, so a test can tell
+    which one the adapter used."""
+    module = types.ModuleType("routes.inference")
+    state = types.SimpleNamespace(backend = backend, switch_calls = [], load_impl_calls = [])
+
+    def get_llama_cpp_backend():
+        return state.backend
+
+    async def _maybe_auto_switch_model(
+        requested_model,
+        fastapi_request,
+        current_subject,
+        *,
+        require_vision = False,
+        require_image = True,
+        modality_label = "image or audio",
+    ):
+        state.switch_calls.append(
+            {
+                "requested_model": requested_model,
+                "fastapi_request": fastapi_request,
+                "current_subject": current_subject,
+                "require_vision": require_vision,
+                "require_image": require_image,
+                "modality_label": modality_label,
+            }
+        )
+        if switch_error is not None:
+            raise switch_error
+        if swaps:
+            swapped = _loaded_by_auto_switch(requested_model)
+            if swapped is not None:
+                state.backend = swapped
+
+    async def _load_model_impl(
+        request,
+        fastapi_request,
+        current_subject,
+        *,
+        current_request_counted = False,
+        on_reload_confirmed = None,
+        load_cancel_event = None,
+    ):
+        # This fake LOADS the model, like the real one. So an adapter that
+        # regressed to calling it would satisfy every other assertion in this
+        # file, and the "never called" one is the only thing standing between
+        # that regression and a swap that hangs on the drain forever.
+        state.load_impl_calls.append(
+            {
+                "model_path": getattr(request, "model_path", None),
+                "current_request_counted": current_request_counted,
+            }
+        )
+        swapped = _loaded_by_auto_switch(getattr(request, "model_path", None))
+        if swapped is not None:
+            state.backend = swapped
+
+    module.get_llama_cpp_backend = get_llama_cpp_backend
+    module._maybe_auto_switch_model = _maybe_auto_switch_model
+    module._load_model_impl = _load_model_impl
+    monkeypatch.setitem(sys.modules, "routes.inference", module)
+    return state
+
+
+def _install_auto_switch_setting(monkeypatch, enabled):
+    module = types.ModuleType("utils.openai_auto_switch_settings")
+
+    def get_openai_auto_switch_enabled():
+        return enabled
+
+    module.get_openai_auto_switch_enabled = get_openai_auto_switch_enabled
+    monkeypatch.setitem(sys.modules, "utils.openai_auto_switch_settings", module)
+
+
+def _install_orchestrator(monkeypatch, active_model_name = None, *, constructed = True):
+    """A fake ``core.inference.orchestrator``. ``constructed = False`` is a
+    process where no orchestrator was ever built, which peek reports as None."""
+    module = types.ModuleType("core.inference.orchestrator")
+
+    def peek_inference_backend():
+        if not constructed:
+            return None
+        return types.SimpleNamespace(active_model_name = active_model_name)
+
+    module.peek_inference_backend = peek_inference_backend
+    monkeypatch.setitem(sys.modules, "core.inference.orchestrator", module)
+
+
+def _install_main(monkeypatch, app):
+    module = types.ModuleType("main")
+    module.app = app
+    monkeypatch.setitem(sys.modules, "main", module)
+    return app
+
+
+@pytest.fixture(autouse = True)
+def _hermetic(monkeypatch):
+    """No test reaches a real setting, a real orchestrator, a real app or the
+    filesystem index unless it installs one itself."""
+    monkeypatch.setattr(local_model_resolver, "resolve_local_gguf", _resolve_local_gguf)
+    _install_auto_switch_setting(monkeypatch, True)
+    _install_orchestrator(monkeypatch, None)
+    _install_main(monkeypatch, types.SimpleNamespace(state = types.SimpleNamespace()))
+
+
+# ── load(): what it drives ──────────────────────────────────────────────
+
+
+def test_load_drives_the_routes_auto_switch(monkeypatch):
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_OTHER_REPO))
+    loader.load(f"{_REPO}:Q4_K_M")
+    assert len(state.switch_calls) == 1, "the route's auto-switch must be what runs"
+    call = state.switch_calls[0]
+    assert call["requested_model"] == f"{_REPO}:Q4_K_M"
+    assert call["current_subject"] == loader.DELEGATION_SUBJECT
+    assert isinstance(call["current_subject"], str) and call["current_subject"]
+
+
+def test_load_never_calls_the_loader_underneath_auto_switch(monkeypatch):
+    """The whole point of the redesign. _load_model_impl is one step of a
+    nine-step protocol; calling it directly skips the resolution of
+    "repo:VARIANT", every serialising lock, the saved launch settings and
+    current_request_counted = True, which is what made the drain wait on the
+    delegating request itself and hang forever."""
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_OTHER_REPO))
+    loader.load(f"{_REPO}:Q4_K_M")
+    assert state.load_impl_calls == [], "the adapter must not call _load_model_impl itself"
+    assert len(state.switch_calls) == 1
+
+
+def test_the_stand_in_carries_the_servers_own_app(monkeypatch):
+    """Without the real app, _resolve_parallel_slots falls back to one slot, so a
+    delegation would reload the user's own model with fewer slots than the server
+    was started with."""
+    app = _install_main(monkeypatch, types.SimpleNamespace(state = types.SimpleNamespace(
+        llama_parallel_slots = 4
+    )))
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_OTHER_REPO))
+    loader.load(_REPO)
+    stand_in = state.switch_calls[0]["fastapi_request"]
+    assert stand_in.app is app
+    assert stand_in.app.state.llama_parallel_slots == 4
+
+
+def test_the_stand_in_has_no_app_when_main_is_not_imported(monkeypatch):
+    monkeypatch.delitem(sys.modules, "main", raising = False)
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_OTHER_REPO))
+    loader.load(_REPO)
+    assert state.switch_calls[0]["fastapi_request"].app is None
+
+
+def test_auto_switch_off_is_refused_by_name(monkeypatch):
+    """Auto-switch returns without loading anything when its toggle is off, so a
+    swap attempted with it off would 'succeed' having done nothing."""
+    _install_auto_switch_setting(monkeypatch, False)
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_OTHER_REPO))
+    with pytest.raises(loader.LoaderError) as excinfo:
+        loader.load(_REPO)
+    assert "Switch model by request" in str(excinfo.value), "name the toggle the user must turn on"
+    assert state.switch_calls == [], "nothing may be attempted while the setting is off"
+
+
+def test_a_swap_that_did_not_happen_is_a_LoaderError(monkeypatch):
+    """Auto-switch dedupes and falls through by design: an unknown name is not an
+    error there, it just keeps serving the loaded model."""
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_OTHER_REPO), swaps = False)
+    with pytest.raises(loader.LoaderError) as excinfo:
+        loader.load(f"{_REPO}:Q4_K_M")
+    message = str(excinfo.value)
+    assert _REPO in message and _OTHER_REPO in message, "name the target and what is resident"
+    assert len(state.switch_calls) == 1
+
+
+def test_a_model_that_is_not_downloaded_is_refused_before_auto_switch_is_called(monkeypatch):
+    """Auto-switch's miss path offers to DOWNLOAD the model, and schedules the
+    watcher for that download with asyncio.create_task on the running loop -- the
+    throwaway one asyncio.run closes as soon as the refusal unwinds. The watcher
+    dies at its first await, leaving a "download" row running forever and the
+    single-flight slot released mid-download. So the miss has to be caught here,
+    before the call, not reported after it."""
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_REPO))
+    with pytest.raises(loader.LoaderError) as excinfo:
+        loader.load("someone/NotDownloaded-GGUF:Q4_K_M")
+    assert state.switch_calls == [], "auto-switch must never see a model that is not here"
+    assert "someone/NotDownloaded-GGUF:Q4_K_M" in str(excinfo.value)
+    assert "not downloaded" in str(excinfo.value)
+
+
+def test_an_exception_from_auto_switch_becomes_a_LoaderError(monkeypatch):
+    _install_route(
+        monkeypatch,
+        _loaded_by_auto_switch(_OTHER_REPO),
+        switch_error = RuntimeError("no VRAM"),
+    )
+    with pytest.raises(loader.LoaderError) as excinfo:
+        loader.load(_REPO)
+    assert "no VRAM" in str(excinfo.value)
+
+
+def test_no_route_module_is_a_LoaderError(monkeypatch):
+    monkeypatch.delitem(sys.modules, "routes.inference", raising = False)
+    with pytest.raises(loader.LoaderError):
+        loader.load(_REPO)
+
+
+def test_overrides_are_accepted_and_change_nothing(monkeypatch):
+    """Role overrides are not applied here: auto-switch loads the model with its
+    own saved launch settings, through model_override_load_kwargs."""
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_OTHER_REPO))
+    loader.load(_REPO)
+    state.backend = _loaded_by_auto_switch(_OTHER_REPO)
+    loader.load(_REPO, {"n_ctx": 16384, "gpu_ids": [1], "max_seq_length": 8192})
+    plain, with_overrides = dict(state.switch_calls[0]), dict(state.switch_calls[1])
+    assert plain.pop("fastapi_request").app is with_overrides.pop("fastapi_request").app
+    assert plain == with_overrides
+
+
+# ── the identity check, mirrored from auto-switch's _already_serving ────
+
+
+def test_an_explicit_quant_must_be_the_quant_that_loaded(monkeypatch):
+    """A bare repo id is satisfied by any quant, an explicit ":QUANT" is not --
+    otherwise a delegation asking for Q8_0 would run on a resident Q4_K_M and
+    nothing would say so."""
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_OTHER_REPO), swaps = False)
+    state.backend = _loaded(_PATH, hf_variant = "Q4_K_M", advertised = _REPO)
+    with pytest.raises(loader.LoaderError):
+        loader.load(f"{_REPO}:Q8_0")
+
+
+def test_a_bare_id_is_served_by_any_quant_of_that_repo(monkeypatch):
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_OTHER_REPO), swaps = False)
+    state.backend = _loaded(_PATH, hf_variant = "Q8_0", advertised = _REPO)
+    loader.load(_REPO)  # must not raise
+
+
+def test_a_backend_that_is_not_loaded_never_counts_as_serving(monkeypatch):
+    """A torn-down backend keeps its last model_identifier. Without the is_loaded
+    half of the mirror, a swap that unloaded the old model and then failed would
+    be read off that stale identifier and reported as success -- the one state
+    where the delegate runs on no model at all."""
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_OTHER_REPO), swaps = False)
+    state.backend = _loaded(_PATH, hf_variant = "Q4_K_M", advertised = _REPO, is_loaded = False)
+    with pytest.raises(loader.LoaderError):
+        loader.load(f"{_REPO}:Q4_K_M")
+
+
+def test_the_advertised_id_alone_can_decide_that_it_is_serving(monkeypatch):
+    """_already_serving matches on the advertised id as well as the identifier,
+    "so a model loaded manually by repo id and one loaded by auto-switch both
+    count as already serving rather than triggering a needless reswap". Here the
+    identifier matches nothing the resolver returned -- the index has moved on to
+    a newer snapshot directory -- and only the advertised repo id can decide it."""
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_OTHER_REPO), swaps = False)
+    state.backend = _loaded(
+        r"C:\hf-cache\models--unsloth--Qwen3-4B-GGUF\snapshots\older",
+        hf_variant = "Q4_K_M",
+        advertised = _REPO,
+    )
+    loader.load(f"{_REPO}:Q4_K_M")  # must not raise
+
+
+def test_a_model_loaded_by_path_counts_as_serving_its_repo_id(monkeypatch):
+    """A manual load records the on-disk path as the identifier and advertises
+    nothing, so the check has to match the resolver's load path too."""
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_OTHER_REPO), swaps = False)
+    state.backend = _loaded(_PATH, hf_variant = "Q4_K_M", advertised = None)
+    loader.load(f"{_REPO}:Q4_K_M")  # must not raise
+
+
+# ── serves(): the one comparison both sides use ─────────────────────────
+
+
+def test_serves_matches_the_aliases_a_string_compare_misses(monkeypatch):
+    """Delegation's per-turn guard used to compare resident_model_id() against the
+    binding as strings, and resident_model_id advertises exactly one of a model's
+    ids. A standalone .gguf reports its path while the binding names the index
+    alias: the same model, refused on the delegate's first turn after both swaps
+    had been paid for."""
+    _install_route(monkeypatch, _loaded(_FILE, hf_variant = "Q4_K_M", advertised = None))
+    assert loader.resident_model_id() == _FILE
+    assert _FILE != _FILE_ALIAS, "the premise: two ids, one model"
+    assert loader.serves(_FILE_ALIAS) is True
+    assert loader.serves(_OTHER_REPO) is False
+
+
+def test_serves_holds_an_explicit_quant_to_the_loaded_one(monkeypatch):
+    _install_route(monkeypatch, _loaded(_PATH, hf_variant = "Q4_K_M", advertised = _REPO))
+    assert loader.serves(f"{_REPO}:Q4_K_M") is True
+    assert loader.serves(_REPO) is True, "a bare id is satisfied by any quant"
+    assert loader.serves(f"{_REPO}:Q8_0") is False
+
+
+def test_load_confirms_the_swap_through_serves(monkeypatch):
+    """One path, so the post-load check and delegation's per-turn guard cannot
+    drift apart into two answers to the same question."""
+    _install_route(monkeypatch, _loaded_by_auto_switch(_OTHER_REPO), swaps = False)
+    asked = []
+    real = loader.serves
+    monkeypatch.setattr(loader, "serves", lambda model_id: asked.append(model_id) or real(model_id))
+    with pytest.raises(loader.LoaderError):
+        loader.load(f"{_REPO}:Q4_K_M")
+    assert asked == [f"{_REPO}:Q4_K_M"], "load() must confirm through serves(), not around it"
+
+
+# ── resident_model_id() / resident_is_restorable() ──────────────────────
+
+
+def test_the_resident_id_carries_the_quant(monkeypatch):
+    """Dropping the quant lets the restore auto-pick a different one -- the idle
+    unload stash keeps the pair for the same reason."""
+    _install_route(monkeypatch, _loaded(_REPO, hf_variant = "Q4_K_M", advertised = None))
+    assert loader.resident_model_id() == f"{_REPO}:Q4_K_M"
+
+
+def test_the_resident_id_prefers_the_advertised_repo_id(monkeypatch):
+    """An auto-switch load records the concrete snapshot path as its identifier
+    and the repo id as the advertised one; the path is not what a reload takes."""
+    _install_route(monkeypatch, _loaded(_PATH, hf_variant = "Q8_0", advertised = _REPO))
+    assert loader.resident_model_id() == f"{_REPO}:Q8_0"
+
+
+def test_the_resident_id_is_bare_when_no_quant_is_known(monkeypatch):
+    _install_route(monkeypatch, _loaded(_REPO, hf_variant = None, advertised = None))
+    assert loader.resident_model_id() == _REPO
+
+
+def test_nothing_loaded_reads_as_none(monkeypatch):
+    _install_route(monkeypatch, _loaded("stale/model", hf_variant = "Q4_K_M", is_loaded = False))
+    assert loader.resident_model_id() is None
+
+
+def test_no_route_module_reads_as_none(monkeypatch):
+    monkeypatch.delitem(sys.modules, "routes.inference", raising = False)
+    assert loader.resident_model_id() is None
+
+
+def test_the_resident_id_round_trips_through_load(monkeypatch):
+    """What Task 6 does: remember the resident model, swap to the delegate, put
+    the first one back."""
+    state = _install_route(monkeypatch, _loaded(_REPO, hf_variant = "Q4_K_M", advertised = None))
+    resident = loader.resident_model_id()
+    loader.load(_OTHER_REPO)
+    assert state.backend.model_identifier == _OTHER_PATH
+    loader.load(resident)  # the restore; raises if it did not take
+    assert state.switch_calls[-1]["requested_model"] == resident
+    assert state.backend.model_identifier == _PATH
+
+
+def test_a_standalone_gguf_reports_the_bare_form_that_resolves(monkeypatch):
+    """The quant-qualified form of a standalone file resolves to nothing -- the
+    backend parsed that quant out of the filename, the index lists none for a
+    single file -- so the id reported has to be the bare one. Returning the
+    prettier form hands the caller an id that cannot be reloaded."""
+    _install_route(monkeypatch, _loaded(_FILE, hf_variant = "Q4_K_M", advertised = None))
+    assert _resolve_local_gguf(f"{_FILE}:Q4_K_M") is None, "the premise: :QUANT must miss here"
+    assert _resolve_local_gguf(_FILE) is not None, "the premise: the bare form must resolve"
+    assert loader.resident_model_id() == _FILE
+
+
+def test_a_standalone_gguf_is_restorable_through_its_bare_form(monkeypatch):
+    _install_route(monkeypatch, _loaded(_FILE, hf_variant = "Q4_K_M", advertised = None))
+    assert loader.resident_is_restorable() is True
+
+
+def test_a_gguf_outside_the_index_is_not_restorable(monkeypatch):
+    """"A GGUF is loaded" is not "this can be loaded again". A file no scan root
+    covers resolves under neither form, so the delegation is refused BEFORE the
+    swap rather than failing to put the model back afterwards."""
+    _install_route(monkeypatch, _loaded(r"D:\elsewhere\mystery.gguf", hf_variant = "Q4_K_M"))
+    assert loader.resident_is_restorable() is False
+
+
+def test_an_unresolvable_resident_gguf_does_not_read_as_nothing_loaded(monkeypatch):
+    _install_route(monkeypatch, _loaded(r"D:\elsewhere\mystery.gguf", hf_variant = "Q4_K_M"))
+    with pytest.raises(loader.LoaderError) as excinfo:
+        loader.resident_model_id()
+    assert "mystery.gguf" in str(excinfo.value)
+
+
+def test_a_transformers_model_is_not_restorable(monkeypatch):
+    """Loading a GGUF unloads it and auto-switch cannot load it back, so Task 6
+    has to refuse BEFORE swapping rather than fail to restore afterwards."""
+    _install_route(monkeypatch, _loaded(None, is_loaded = False))
+    _install_orchestrator(monkeypatch, "unsloth/Llama-3.2-1B-Instruct")
+    assert loader.resident_is_restorable() is False
+
+
+def test_a_transformers_model_does_not_read_as_nothing_loaded(monkeypatch):
+    """Answering None here is how a user's model gets silently replaced by the
+    delegate's: the caller restores nothing and reports nothing."""
+    _install_route(monkeypatch, _loaded(None, is_loaded = False))
+    _install_orchestrator(monkeypatch, "unsloth/Llama-3.2-1B-Instruct")
+    with pytest.raises(loader.LoaderError) as excinfo:
+        loader.resident_model_id()
+    assert "unsloth/Llama-3.2-1B-Instruct" in str(excinfo.value)
+
+
+def test_both_backends_loaded_names_the_one_that_blocks_the_restore(monkeypatch):
+    """The two functions used to walk the backends in opposite orders --
+    resident_is_restorable Transformers first, resident_model_id GGUF first -- so
+    with both loaded the refusal delegation builds out of resident_model_id named
+    the model that IS restorable and never mentioned the one that blocked it."""
+    _install_route(monkeypatch, _loaded(_PATH, hf_variant = "Q4_K_M", advertised = _REPO))
+    _install_orchestrator(monkeypatch, "unsloth/Llama-3.2-1B-Instruct")
+    assert loader.resident_is_restorable() is False, "the Transformers model blocks it"
+    with pytest.raises(loader.LoaderError) as excinfo:
+        loader.resident_model_id()
+    message = str(excinfo.value)
+    assert "unsloth/Llama-3.2-1B-Instruct" in message, "name what blocked the restore"
+    assert _REPO not in message, "naming the restorable GGUF here is the bug"
+
+
+def test_a_resident_gguf_is_restorable(monkeypatch):
+    _install_route(monkeypatch, _loaded(_PATH, hf_variant = "Q4_K_M", advertised = _REPO))
+    assert loader.resident_is_restorable() is True
+
+
+def test_nothing_loaded_is_restorable(monkeypatch):
+    _install_route(monkeypatch, _loaded(None, is_loaded = False))
+    _install_orchestrator(monkeypatch, None, constructed = False)
+    assert loader.resident_is_restorable() is True
+
+
+def test_an_unreadable_backend_is_not_restorable(monkeypatch):
+    module = types.ModuleType("core.inference.orchestrator")
+
+    def peek_inference_backend():
+        raise RuntimeError("orchestrator is mid-teardown")
+
+    module.peek_inference_backend = peek_inference_backend
+    monkeypatch.setitem(sys.modules, "core.inference.orchestrator", module)
+    assert loader.resident_is_restorable() is False
+
+
+# ── the user pin, which the restore inherits a line that clears ─────────
+
+
+def test_the_user_pin_is_read_off_the_backend_and_put_back(monkeypatch):
+    """_loaded_by_user_action is what "unload API-loaded models only" spares a
+    model by (llama_keepwarm.py:446), and auto-switch clears it on every swap it
+    performs (routes/inference.py:6222) -- including delegation's restore, which is
+    putting a HAND-loaded model back."""
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_REPO))
+    state.backend._loaded_by_user_action = True
+    assert loader.resident_is_user_pinned() is True
+
+    state.backend._loaded_by_user_action = False  # what the restore's swap leaves
+    loader.restore_user_pin(True)
+    assert state.backend._loaded_by_user_action is True
+
+
+def test_restoring_a_model_that_was_not_pinned_never_pins_it(monkeypatch):
+    """The helper only ever SETS the flag. Writing False would un-pin whatever the
+    backend holds, and writing True unconditionally would tell the idle unloader to
+    spare a model the user never loaded by hand."""
+    state = _install_route(monkeypatch, _loaded_by_auto_switch(_REPO))
+    state.backend._loaded_by_user_action = False
+    assert loader.resident_is_user_pinned() is False
+    loader.restore_user_pin(False)
+    assert state.backend._loaded_by_user_action is False
+
+
+def test_the_pin_helpers_never_raise(monkeypatch):
+    """Bookkeeping either side of a restore: a backend they cannot read must cost
+    the user a reprieve, never the restore itself."""
+    monkeypatch.delitem(sys.modules, "routes.inference", raising = False)
+    assert loader.resident_is_user_pinned() is False
+    loader.restore_user_pin(True)  # must not raise
+
+    module = types.ModuleType("routes.inference")
+
+    def get_llama_cpp_backend():
+        raise RuntimeError("backend is mid-teardown")
+
+    module.get_llama_cpp_backend = get_llama_cpp_backend
+    monkeypatch.setitem(sys.modules, "routes.inference", module)
+    assert loader.resident_is_user_pinned() is False
+    loader.restore_user_pin(True)  # must not raise
+
+
+# ── the fakes themselves ────────────────────────────────────────────────
+
+
+def test_the_auto_switch_fake_matches_the_real_signature(monkeypatch):
+    """Read from routes/inference.py's source, not by importing it: importing the
+    route module pulls in the whole inference stack. A fake that has drifted from
+    the real signature is what hid the missing current_request_counted, so this
+    file is only worth as much as this check."""
+    source = (Path(__file__).resolve().parents[1] / "routes" / "inference.py").read_text(
+        encoding = "utf-8"
+    )
+    real = next(
+        node
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_maybe_auto_switch_model"
+    )
+    _install_route(monkeypatch, _loaded(None, is_loaded = False))
+    fake = inspect.signature(sys.modules["routes.inference"]._maybe_auto_switch_model)
+    assert [a.arg for a in real.args.args] == [
+        name
+        for name, p in fake.parameters.items()
+        if p.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    ]
+    assert [a.arg for a in real.args.kwonlyargs] == [
+        name for name, p in fake.parameters.items() if p.kind is inspect.Parameter.KEYWORD_ONLY
+    ]
+    assert real.args.vararg is None and real.args.kwarg is None
+    assert not any(
+        p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+        for p in fake.parameters.values()
+    ), "a **kwargs fake swallows the argument a test was written to catch"
