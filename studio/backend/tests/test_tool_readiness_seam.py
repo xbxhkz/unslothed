@@ -296,4 +296,8 @@ def test_the_seam_stays_additive():
     assert stat, "no diff recorded for tools.py"
     insertions, deletions = int(stat[0]), int(stat[1])
     assert deletions == 0, f"tools.py lost {deletions} line(s); the seam must be additive"
-    assert insertions <= 100, f"seam grew to {insertions}; budget is ~93"
+    # Measured 114 insertions once capability_map and delegation both landed
+    # the execution context. Two more ceilings on this same file live in
+    # tests/test_tool_audit_seam.py and tests/test_delegation_seam.py -- whoever
+    # next grows the seam needs to raise all three.
+    assert insertions <= 120, f"seam grew to {insertions}; measured 114"

@@ -257,6 +257,20 @@ CAPABILITIES: tuple[Capability, ...] = (
         None,
     ),
     Capability(
+        "delegate_to_another_model",
+        "Hand a self-contained task to a model configured for another role",
+        ("ask another model", "delegate", "use the coding model", "use a different model"),
+        (
+            _tool(
+                "ask_model",
+                "loads the role's model, works with its own tools, writes its result to a "
+                "file, then loads back the model you were using -- so it costs two model "
+                "swaps and suits a task another model is genuinely better at, not a small step",
+            ),
+        ),
+        "Needs a model bound to that role in Settings, and Switch model by request turned on.",
+    ),
+    Capability(
         "computer_control",
         "Control the mouse, keyboard and applications",
         ("control the computer", "mouse and keyboard", "desktop control", "automate applications"),

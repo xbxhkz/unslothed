@@ -41,13 +41,19 @@ def _tool_names_required():
                     yield requirement.name
 
 
-def test_the_vocabulary_is_the_22_specified_capabilities_in_order():
+def test_the_vocabulary_is_the_specified_capabilities_in_order():
+    """The spec pinned 22. delegate_to_another_model is the 23rd, added when the
+    delegation branch landed: the map's promise is that EVERY tool is findable by
+    capability, so registering ask_model without an entry breaks it -- which is
+    exactly how this was caught, by running both suites on the merged tree rather
+    than each branch's own."""
     assert [c.name for c in CAPABILITIES] == [
         "internet_search", "run_python", "run_commands", "filesystem", "pdf_analysis",
         "ocr", "image_understanding", "object_detection", "camera", "image_processing",
         "image_editing", "background_removal", "face_swap", "image_generation",
         "video_editing", "speech_to_text", "word_documents", "document_search",
-        "conversation_recall", "code_intelligence", "visual_output", "computer_control",
+        "conversation_recall", "code_intelligence", "visual_output",
+        "delegate_to_another_model", "computer_control",
     ]
 
 
