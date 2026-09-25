@@ -397,6 +397,61 @@ for path in sorted(FRONTEND.joinpath("src").rglob("*.ts*")):
                 f"on the allowlist -- either rename it or add it to KEEP_ALLOWLIST/"
                 f"KEEP_PATTERNS with a reason: {line.strip()[:160]!r}")
 
+# 7. Tests that ASSERT on a renamed string. Checks 1-6 walk src/ only, so a
+# rename can update a user-visible string and leave the test asserting the old
+# brand. That is exactly what 90ae250b did: six tests went red and stayed red,
+# plus a seventh that never went red at all --
+#
+#     source: "... is managed by Unslothed and cannot be passed here."
+#     test:   assert.match(text, /managed by Unsloth/)
+#
+# which PASSED, because the renamed string CONTAINS the old one and the regex is
+# unanchored. It read as a brand check while being true under either brand, so it
+# could not detect a rename in either direction. A red test announces itself;
+# that kind does not, and no test run will ever surface it.
+#
+# Deliberately narrow: only lines that ASSERT, not every mention. tests/ is full
+# of legitimate "Unsloth" -- the HF org slug, "Unsloth/Repo-GGUF" repo ids,
+# docs.unsloth.ai, and the LIBRARY's own log output fed in as fixture input
+# ("Unsloth: Formatting dataset"). Those are DATA, and data does not go stale
+# when the product is renamed; an assertion does. Flagging every mention would
+# mean ~21 allowlist entries guarding one real check.
+TEST_ASSERT = re.compile(r"\bassert\.\w+\(")
+# Case-SENSITIVE, unlike BRAND_WORD, for the reason KEEP_PATTERNS gives above:
+# the product name in a user-visible string is always capitalized, while every
+# lowercase "unsloth" in tests is a functional token that is never renamed -- an
+# HF repo id or cache path (models--unsloth--x), the `unsloth studio update` CLI
+# command, a drag type (application/x-unsloth-...), a CSS class. Requiring the
+# capital excludes all of those by construction rather than by allowlist, and a
+# capitalized hit is exactly the shape of a real leftover.
+TEST_BRAND = re.compile(r"\bUnsloth\b(?!ed)")
+TESTS_KEEP = [
+    ("model-row-owner.test.ts", 'isUnslothOwner("Unsloth")',
+     "the Hugging Face ORG slug, which upstream owns and this fork does not "
+     "rename -- the function under test decides HF ownership, not branding"),
+    ("training-start-preparation.test.ts", "Unsloth: Formatting dataset",
+     "a log line the Unsloth LIBRARY prints, fed in as parser input; the parser "
+     "must keep matching what the library actually emits"),
+]
+tests_dir = FRONTEND / "tests"
+if tests_dir.is_dir():
+    for path in sorted(tests_dir.rglob("*.ts")):
+        lines = path.read_text(encoding = "utf-8", errors = "replace").split("\n")
+        comment_masked = _is_comment_masked(lines)
+        for i, line in enumerate(lines):
+            if SPDX_LINE.match(line) or comment_masked[i] or not TEST_ASSERT.search(line):
+                continue
+            if not TEST_BRAND.search(line):
+                continue
+            if any(name == path.name and frag in line for name, frag, _why in TESTS_KEEP):
+                continue
+            failures.append(
+                f"{path.relative_to(ROOT)}:{i + 1}: a test ASSERTS on 'Unsloth'. If the "
+                f"source says 'Unslothed', this assertion is stale -- and an unanchored "
+                f"regex will pass on it as a substring rather than fail. Match the source "
+                f"string exactly, or add it to TESTS_KEEP with a reason: "
+                f"{line.strip()[:160]!r}")
+
 if failures:
     print("BRANDING CHECK FAILED")
     for f in failures:
