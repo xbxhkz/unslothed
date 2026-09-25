@@ -10,6 +10,10 @@ classifier it was supposed to reuse.
 
 from __future__ import annotations
 
+import os
+import sys
+import types
+
 import pytest
 
 from core.inference import tool_readiness as tr
@@ -25,7 +29,7 @@ def _clean():
 
 
 def test_trivially_ready_tools_are_ready():
-    for name in ("terminal", "python", "edit_file", "render_html", "check_tool_readiness"):
+    for name in ("terminal", "python", "edit_file", "render_html", "check_tool_readiness", "find_capability"):
         assert tr.resolve(name).state == tr.READY, name
 
 
@@ -221,16 +225,23 @@ def test_the_no_argument_report_covers_every_real_tool():
         assert tool["function"]["name"] in lines, tool["function"]["name"]
 
 
-def test_unprobed_tools_are_reported_as_unknown_rows_not_omitted():
-    """The row must actually say 'unknown'; merely appearing is not enough."""
+def test_unprobed_tools_are_reported_as_unknown_rows_not_omitted(monkeypatch):
+    """The row must actually say 'unknown'; merely appearing is not enough.
+
+    This used to name detect_shapes, edit_image_prompt and remove_background, the
+    three tools piece 3a left unprobed. Piece 3b gave all three probes, so no real
+    built-in tool is unprobed any more -- the invariant is exercised instead with a
+    name that has no probe by construction, added to the catalogue the report
+    walks. What is being guarded is unchanged."""
+    real = tr._all_tool_names()
+    monkeypatch.setattr(tr, "_all_tool_names", lambda: real + ["zz_unprobed_tool"])
     report = tr.execute("check_tool_readiness", {})
     rows = {
         line.split()[0]: line
         for line in report.splitlines()
         if not line.startswith(" ")
     }
-    for name in ("detect_shapes", "edit_image_prompt", "remove_background"):
-        assert "unknown" in rows[name], rows[name]
+    assert "unknown" in rows["zz_unprobed_tool"], rows["zz_unprobed_tool"]
 
 
 def test_probe_names_match_real_tools():
@@ -240,3 +251,177 @@ def test_probe_names_match_real_tools():
     real = {t["function"]["name"] for t in ALL_TOOLS}
     for name in tr.registered_names():
         assert name in real, f"probe registered for unknown tool {name!r}"
+
+
+# --- piece 3b: the three tools 3a left unprobed -----------------------------
+
+
+def test_the_three_previously_unprobed_tools_now_have_probes():
+    for name in ("remove_background", "detect_shapes", "edit_image_prompt"):
+        assert name in tr.registered_names(), name
+
+
+# remove_background
+
+
+def test_remove_background_missing_without_onnxruntime(monkeypatch):
+    monkeypatch.setattr(probes, "_module_present", lambda name: name != "onnxruntime")
+    monkeypatch.setattr(probes, "_bg_removal_weight_present", lambda: True)
+    r = tr.resolve("remove_background", refresh = True)
+    assert r.state == tr.MISSING
+    assert r.missing == "onnxruntime"
+
+
+def test_remove_background_missing_without_its_weight(monkeypatch):
+    monkeypatch.setattr(probes, "_module_present", lambda name: True)
+    monkeypatch.setattr(probes, "_bg_removal_weight_present", lambda: False)
+    r = tr.resolve("remove_background", refresh = True)
+    assert r.state == tr.MISSING
+    assert r.missing == "u2net.onnx"
+
+
+def test_remove_background_ready_with_package_and_weight(monkeypatch):
+    """Control for the two tests above."""
+    monkeypatch.setattr(probes, "_module_present", lambda name: True)
+    monkeypatch.setattr(probes, "_bg_removal_weight_present", lambda: True)
+    assert tr.resolve("remove_background", refresh = True).state == tr.READY
+
+
+def test_the_bg_weight_check_delegates_to_bg_removal_itself(tmp_path, monkeypatch):
+    """bg_removal._model_path owns the override env var and the cache root."""
+    from core.inference.assist_vision import bg_removal
+
+    weight = tmp_path / "u2net.onnx"
+    monkeypatch.setattr(bg_removal, "_model_path", lambda: str(weight))
+    assert probes._bg_removal_weight_present() is False
+    weight.write_bytes(b"x")
+    assert probes._bg_removal_weight_present() is True
+
+
+# detect_shapes
+
+
+def test_detect_shapes_missing_without_torch_or_torchvision(monkeypatch):
+    monkeypatch.setattr(probes, "_maskrcnn_weight_present", lambda: True)
+    for absent in ("torch", "torchvision"):
+        monkeypatch.setattr(probes, "_module_present", lambda name, a = absent: name != a)
+        r = tr.resolve("detect_shapes", refresh = True)
+        assert r.state == tr.MISSING, absent
+        assert r.missing == absent
+
+
+def test_detect_shapes_missing_without_its_weight(monkeypatch):
+    monkeypatch.setattr(probes, "_module_present", lambda name: True)
+    monkeypatch.setattr(probes, "_maskrcnn_weight_present", lambda: False)
+    r = tr.resolve("detect_shapes", refresh = True)
+    assert r.state == tr.MISSING
+    assert "first use" in (r.remedy or "")
+
+
+def test_detect_shapes_ready_with_packages_and_weight(monkeypatch):
+    """Control for the two tests above."""
+    monkeypatch.setattr(probes, "_module_present", lambda name: True)
+    monkeypatch.setattr(probes, "_maskrcnn_weight_present", lambda: True)
+    assert tr.resolve("detect_shapes", refresh = True).state == tr.READY
+
+
+def test_the_maskrcnn_weight_check_delegates_to_the_vision_model_root(tmp_path, monkeypatch):
+    """shape_detect._get_model() redirects torch's hub dir to model_root() with
+    torch.hub.set_dir() before downloading, so that -- not torch's default
+    ~/.cache/torch/hub -- is where the weight actually lands. Patching the
+    owner module (models.model_root), not the probe, proves the delegation
+    rather than a copy of it."""
+    from core.inference.assist_vision import models
+
+    monkeypatch.setattr(models, "model_root", lambda: str(tmp_path))
+    assert probes._maskrcnn_weight_present() is False
+    checkpoints = tmp_path / "checkpoints"
+    checkpoints.mkdir()
+    (checkpoints / probes._MASKRCNN_WEIGHT).write_bytes(b"x")
+    assert probes._maskrcnn_weight_present() is True
+
+
+def test_the_pinned_maskrcnn_filename_matches_torchvision():
+    """Drift guard: reading the filename at runtime would import torchvision's
+    detection stack, so it is pinned and checked here."""
+    detection = pytest.importorskip("torchvision.models.detection")
+    url = detection.MaskRCNN_ResNet50_FPN_Weights.DEFAULT.url
+    assert os.path.basename(url) == probes._MASKRCNN_WEIGHT
+
+
+# edit_image_prompt
+
+_ROUTER = "core.inference.diffusion_engine_router"
+_DIFFUSION = "core.inference.diffusion"
+
+
+@pytest.fixture
+def _diffusion_modules(monkeypatch):
+    """Clears both modules and returns a helper to install fakes. The fakes'
+    creating getters RECORD calls; resolve() swallows exceptions, so a raising
+    tripwire would be inert."""
+    monkeypatch.delitem(sys.modules, _ROUTER, raising = False)
+    monkeypatch.delitem(sys.modules, _DIFFUSION, raising = False)
+    calls = []
+
+    def install(*, active = None, backend = "absent"):
+        if active is not None:
+            router = types.ModuleType(_ROUTER)
+            router.ENGINE_DIFFUSERS = "diffusers"
+            router.ENGINE_SD_CPP = "sd_cpp"
+            router._active_engine_name = active
+            router.get_active_diffusion_engine = lambda: calls.append("get_active_diffusion_engine")
+            monkeypatch.setitem(sys.modules, _ROUTER, router)
+        if backend != "absent":
+            diffusion = types.ModuleType(_DIFFUSION)
+            diffusion._diffusion_backend = backend
+            diffusion.get_diffusion_backend = lambda: calls.append("get_diffusion_backend")
+            monkeypatch.setitem(sys.modules, _DIFFUSION, diffusion)
+
+    return install, calls
+
+
+def _engine(loaded):
+    return types.SimpleNamespace(is_loaded = loaded)
+
+
+def test_edit_image_prompt_unknown_when_no_router_is_in_memory(_diffusion_modules):
+    assert tr.resolve("edit_image_prompt", refresh = True).state == tr.UNKNOWN
+
+
+def test_edit_image_prompt_unknown_when_the_engine_module_is_not_in_memory(_diffusion_modules):
+    install, _calls = _diffusion_modules
+    install(active = "diffusers")
+    assert tr.resolve("edit_image_prompt", refresh = True).state == tr.UNKNOWN
+
+
+def test_edit_image_prompt_missing_on_the_native_sd_cpp_engine(_diffusion_modules):
+    install, _calls = _diffusion_modules
+    install(active = "sd_cpp", backend = _engine(True))
+    r = tr.resolve("edit_image_prompt", refresh = True)
+    assert r.state == tr.MISSING
+    assert "image-to-image" in r.detail
+
+
+def test_edit_image_prompt_missing_when_no_image_model_is_loaded(_diffusion_modules):
+    install, _calls = _diffusion_modules
+    install(active = "diffusers", backend = None)
+    assert tr.resolve("edit_image_prompt", refresh = True).state == tr.MISSING
+    install(active = "diffusers", backend = _engine(False))
+    assert tr.resolve("edit_image_prompt", refresh = True).state == tr.MISSING
+
+
+def test_edit_image_prompt_ready_with_a_diffusers_model_loaded(_diffusion_modules):
+    """Control for the missing cases above."""
+    install, _calls = _diffusion_modules
+    install(active = "diffusers", backend = _engine(True))
+    assert tr.resolve("edit_image_prompt", refresh = True).state == tr.READY
+
+
+def test_the_diffusion_probe_never_calls_a_creating_getter(_diffusion_modules):
+    install, calls = _diffusion_modules
+    install(active = "diffusers", backend = _engine(True))
+    assert tr.resolve("edit_image_prompt", refresh = True).state == tr.READY
+    install(active = "sd_cpp", backend = None)
+    tr.resolve("edit_image_prompt", refresh = True)
+    assert calls == [], f"the probe constructed an engine: {calls}"

@@ -110,7 +110,7 @@ def test_the_seams_stay_additive():
     base = subprocess.run(["git", "merge-base", "origin/main", "HEAD"], cwd = repo,
                           capture_output = True, text = True, check = True).stdout.strip()
     for path, ceiling in (
-        # tools.py measured 109 insertions when the delegation dispatch was
+        # tools.py measured 114 insertions when the delegation dispatch was
         # widened to forward the execution context. Two more ceilings on this
         # same file live in tests/test_tool_audit_seam.py and
         # tests/test_tool_readiness_seam.py -- whoever grows the seam next has

@@ -3672,9 +3672,10 @@ async def _select_request_tools(
             ASSIST_VISION_TOOL_NAMES,
             ASSIST_CODE_TOOL_NAMES,
             READINESS_TOOL_NAMES,
+            CAPABILITY_TOOL_NAMES,
             DELEGATION_TOOL_NAMES,
         )
-        _addable = ASSIST_VISION_TOOL_NAMES | ASSIST_CODE_TOOL_NAMES | READINESS_TOOL_NAMES | DELEGATION_TOOL_NAMES
+        _addable = ASSIST_VISION_TOOL_NAMES | ASSIST_CODE_TOOL_NAMES | READINESS_TOOL_NAMES | CAPABILITY_TOOL_NAMES | DELEGATION_TOOL_NAMES
         _already = {t["function"]["name"] for t in tools}
         tools = tools + [
             t for t in ALL_TOOLS
@@ -20036,18 +20037,18 @@ _ANTHROPIC_UNPROMPTED_SAFE_TOOLS = frozenset(
     {"web_search", "search_knowledge_base", "search_conversation"}
 )
 
-# fork: additive rebind rather than editing the frozenset literal above, which
-# would be a DELETION against upstream. check_tool_readiness belongs here for the
-# same reason it is in tools._ALWAYS_SAFE_TOOLS: it only reads a marker file, a
-# PATH entry and importlib metadata, so it can never need the confirmation prompt
-# this channel has no way to present. Without it a Messages client that names the
-# tool explicitly is rejected outright under the default ("auto") permission mode.
-# Its one reader is the genexp at _gated_tool_selected_pre, which loads this name
-# as a module global at CALL time (LOAD_GLOBAL) -- so the rebind is seen. Verified
-# by executing that genexp's own code object against this module's globals, not by
+# fork: additive rebind rather than editing the frozenset literal above, which would be a DELETION
+# against upstream. check_tool_readiness and find_capability both belong here for the same reason:
+# like tools._ALWAYS_SAFE_TOOLS, each only reads local state -- a marker file, a PATH entry,
+# importlib metadata, or the capability map's own readiness probes -- and never executes or
+# writes, so neither can ever need the confirmation prompt this channel has no way to present.
+# Without both, a Messages client naming either tool explicitly is rejected outright under the
+# default ("auto") permission mode. Their one reader is the genexp at _gated_tool_selected_pre,
+# which loads this name as a module global at CALL time (LOAD_GLOBAL) -- so the rebind is seen.
+# Verified by executing that genexp's own code object against this module's globals, not by
 # reading it: see test_readiness_is_unprompted_on_the_anthropic_channel.
 _ANTHROPIC_UNPROMPTED_SAFE_TOOLS = _ANTHROPIC_UNPROMPTED_SAFE_TOOLS | frozenset(
-    {"check_tool_readiness"}
+    {"check_tool_readiness", "find_capability"}
 )
 
 
