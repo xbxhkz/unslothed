@@ -19,6 +19,7 @@ import uuid
 from core.continuity.schemas import ContinuityError
 
 _AI_DIR_NAME = ".ai"
+CURRENT_SCHEMA_VERSION = 1
 
 
 def write_json_atomic(path: str, data: dict) -> None:
@@ -30,12 +31,12 @@ def write_json_atomic(path: str, data: dict) -> None:
             json.dump(data, f, indent = 2)
             f.write("\n")
         os.replace(tmp_path, path)
-    except BaseException:
+    except BaseException as exc:
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
-        raise
+        raise ContinuityError(f"could not write {path}: {exc}") from exc
 
 
 def read_json(path: str) -> dict | None:

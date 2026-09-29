@@ -50,3 +50,15 @@ def test_ai_dir_creates_the_directory_tree(tmp_path):
     assert result == os.path.join(project_dir, ".ai")
     assert os.path.isdir(os.path.join(result, "logs"))
     assert os.path.isdir(os.path.join(result, "checkpoints"))
+
+
+def test_write_json_atomic_wraps_write_failure_in_continuity_error(tmp_path, monkeypatch):
+    target = str(tmp_path / "state.json")
+
+    def raise_on_dump(*args, **kwargs):
+        raise ValueError("simulated json.dump failure")
+
+    monkeypatch.setattr(json, "dump", raise_on_dump)
+    with pytest.raises(ContinuityError) as exc_info:
+        storage.write_json_atomic(target, {"a": 1})
+    assert "could not write" in exc_info.value.message

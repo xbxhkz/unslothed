@@ -21,6 +21,10 @@ class ContinuityError(Exception):
     never guesses at recovery in place of raising -- that is each caller's own
     decision to make, not this module's."""
 
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
 
 def _require(d: dict, key: str, expected_type: type):
     if key not in d:
