@@ -256,3 +256,113 @@ def checkpoint(project_dir: str, note: str, *, retain: int = _DEFAULT_CHECKPOINT
             except OSError:
                 pass
     return filename
+
+
+def _find_cycle(tasks: list[Task]) -> list[str] | None:
+    """DFS cycle detection over depends_on edges. Returns the cycle's task ids,
+    or None. Bounded by len(tasks) recursion depth, which this project's task
+    graphs are nowhere near large enough to make a concern."""
+    by_id = {t.id: t for t in tasks}
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color = {t.id: WHITE for t in tasks}
+    stack: list[str] = []
+
+    def visit(tid: str) -> list[str] | None:
+        color[tid] = GRAY
+        stack.append(tid)
+        for dep in by_id.get(tid, Task(id = tid, title = "", status = "")).depends_on:
+            if dep not in by_id:
+                continue  # unknown ids are validate's own separate problem
+            if color.get(dep) == GRAY:
+                cycle_start = stack.index(dep)
+                return stack[cycle_start:] + [dep]
+            if color.get(dep) == WHITE:
+                found = visit(dep)
+                if found:
+                    return found
+        stack.pop()
+        color[tid] = BLACK
+        return None
+
+    for t in tasks:
+        if color[t.id] == WHITE:
+            found = visit(t.id)
+            if found:
+                return found
+    return None
+
+
+def validate(project_dir: str) -> list[str]:
+    """Read-only. Never raises -- a validator that can crash on the exact data
+    it exists to check is not trustworthy. Problems are returned as plain
+    strings; there is no downstream consumer yet that needs structure richer
+    than 'read this to a human'."""
+    problems: list[str] = []
+
+    try:
+        state = load_state(project_dir)
+    except ContinuityError as exc:
+        problems.append(f"project_state.json: {exc}")
+        state = None
+
+    try:
+        tasks = load_tasks(project_dir).tasks
+    except ContinuityError as exc:
+        problems.append(f"task_queue.json: {exc}")
+        tasks = []
+
+    ids = [t.id for t in tasks]
+    dupes = {i for i in ids if ids.count(i) > 1}
+    if dupes:
+        problems.append(f"duplicate task id(s): {sorted(dupes)}")
+
+    known = set(ids)
+    for t in tasks:
+        for dep in t.depends_on:
+            if dep not in known:
+                problems.append(f"task {t.id!r} depends on unknown id {dep!r}")
+
+    cycle = _find_cycle(tasks)
+    if cycle:
+        problems.append(f"dependency cycle: {' -> '.join(cycle)}")
+
+    if state is not None and state.current_task and state.current_task not in known:
+        problems.append(
+            f"project_state.json names current_task {state.current_task!r}, "
+            "which is not in task_queue.json"
+        )
+
+    return problems
+
+
+def repair(project_dir: str) -> list[str]:
+    """Regenerates ONLY derived data: the rendered .md files. Never touches a
+    task's status, never adds an acceptance criterion, never marks anything
+    complete -- see spec section 28. Readiness itself needs no repair, since it
+    was never stored (Task 3)."""
+    from core.continuity import render
+
+    actions: list[str] = []
+    summary = render.render_context_summary(project_dir)
+    _write_text(os.path.join(storage.ai_dir(project_dir), "context_summary.md"), summary)
+    actions.append("regenerated context_summary.md")
+
+    state_md = render.render_project_state_md(project_dir)
+    _write_text(os.path.join(storage.ai_dir(project_dir), "project_state.md"), state_md)
+    actions.append("regenerated project_state.md")
+
+    return actions
+
+
+def _write_text(path: str, text: str) -> None:
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding = "utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
