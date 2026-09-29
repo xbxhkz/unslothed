@@ -10,6 +10,8 @@ Python, never imported as a package.
     ... status
     ... task add <id> --title "..." [--depends-on id1,id2] [--criteria "c1;c2"]
     ... task set-status <id> <status>
+    ... error record "<what was tried>" "<why it failed>" [--symptom "<tag>"]
+    ... error check "<symptom query>"
     ... checkpoint "<note>"
     ... validate
     ... repair
@@ -33,6 +35,13 @@ _BACKEND_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _BACKEND_ROOT not in sys.path:
     sys.path.insert(0, _BACKEND_ROOT)
 
+# Where `error record` falls back to if errors.jsonl cannot be written. Known
+# only here, not in core.continuity: the CLI runs as the user on their own
+# machine, so a note in their own .remember is a safety net; the app-side tool
+# is model-driven and passes no fallback at all (see record_error). Tests
+# monkeypatch this to a tmp_path file and never touch the real one.
+_REMEMBER_NOW_PATH = os.path.expanduser(r"~\odysseus\.remember\now.md")
+
 
 def _default_project_dir() -> str:
     return os.getcwd()
@@ -40,7 +49,8 @@ def _default_project_dir() -> str:
 
 def main(argv: list[str]) -> int:
     # --project-dir is declared on each LEAF subparser (status, validate,
-    # repair, init, checkpoint, task-add, task-set-status) through this
+    # repair, init, checkpoint, task-add, task-set-status, error-record,
+    # error-check) through this
     # shared parent, rather than once on the top-level parser the way a
     # first draft of this file tried it. argparse's subparsers action
     # consumes everything after the verb token as that subparser's own
@@ -49,7 +59,7 @@ def main(argv: list[str]) -> int:
     # is how this file's own usage docstring above, every test in
     # test_continuity_cli.py, and Step 5's manual verification all place it
     # (`status --project-dir .`, never `--project-dir . status`). Declaring
-    # it on each leaf, and NOT on the intermediate "task" parser, also
+    # it on each leaf, and NOT on the intermediate "task"/"error" parsers, also
     # sidesteps the opposite argparse footgun: when a parent parser and a
     # child parser both default the same dest, the child's default silently
     # overwrites whatever value the parent already parsed.
@@ -81,6 +91,15 @@ def main(argv: list[str]) -> int:
     set_status.add_argument("id")
     set_status.add_argument("status")
 
+    error = sub.add_parser("error")
+    error_sub = error.add_subparsers(dest = "error_verb")
+    record = error_sub.add_parser("record", parents = [common])
+    record.add_argument("what_tried")
+    record.add_argument("why_failed")
+    record.add_argument("--symptom", default = "")
+    check = error_sub.add_parser("check", parents = [common])
+    check.add_argument("symptom_query")
+
     # argparse's own parser.error() (an unknown verb, a missing required
     # positional, or any other bad argv) prints a usage message to stderr
     # and calls sys.exit(2) -- it does not raise a catchable exception by
@@ -104,8 +123,8 @@ def main(argv: list[str]) -> int:
     project_dir = getattr(args, "project_dir", None) or _default_project_dir()
 
     from core.continuity import (
-        add_task, checkpoint, load_state, load_tasks, repair, set_task_status,
-        validate, write_state,
+        add_task, checkpoint, load_state, load_tasks, prior_failures, record_error,
+        repair, set_task_status, validate, write_state,
     )
     from core.continuity.render import render_context_summary
     from core.continuity.schemas import ContinuityError, ProjectState, Task
@@ -184,6 +203,30 @@ def main(argv: list[str]) -> int:
                 print(f"Task {args.id!r} is now {args.status!r}.")
                 return 0
             print(f"Unknown task verb: {args.task_verb!r}", file = sys.stderr)
+            return 2
+
+        if args.verb == "error":
+            if args.error_verb == "record":
+                recorded = record_error(
+                    project_dir, what_tried = args.what_tried, why_failed = args.why_failed,
+                    symptom = args.symptom, fallback_path = _REMEMBER_NOW_PATH,
+                )
+                if not recorded:
+                    print("Error: could not record this -- the write to .ai/logs/errors.jsonl "
+                          f"failed, and so did the fallback note at {_REMEMBER_NOW_PATH!r}.",
+                          file = sys.stderr)
+                    return 1
+                print("Recorded.")
+                return 0
+            if args.error_verb == "check":
+                hits = prior_failures(project_dir, args.symptom_query)
+                if not hits:
+                    print("No prior recorded failures match that.")
+                    return 0
+                for h in hits:
+                    print(f"- {h.what_tried} -- {h.why_failed}")
+                return 0
+            print(f"Unknown error verb: {args.error_verb!r}", file = sys.stderr)
             return 2
 
         print(f"Unknown verb: {args.verb!r}", file = sys.stderr)

@@ -3,17 +3,28 @@
 
 """logs/errors.jsonl: append-only, queried by a substring match on symptom.
 
-record_error is never-raises internally: if the primary write to errors.jsonl
-fails, it falls back to appending into .remember/now.md rather than losing the
-record of a failure silently. That fallback is tested here against a redirected
-fallback path (monkeypatched), not the real ~/odysseus/.remember, since a test
-must never touch the user's real notes.
+record_error is never-raises internally, and reports honestly whether the entry
+landed anywhere: True for errors.jsonl, or for a fallback file ONLY when the
+caller explicitly passes fallback_path; False when it was lost. The core
+hardcodes no fallback target -- the app tool passes none (a model-driven write
+must not escape the sandbox), the CLI passes the human's own .remember/now.md.
+Every fallback here is a tmp_path file, never the real ~/odysseus/.remember,
+since a test must never touch the user's real notes.
 """
 
 from __future__ import annotations
 
 from core.continuity import prior_failures, record_error
 from core.continuity import __init__ as continuity_module
+
+
+def _fail_the_primary_write(monkeypatch):
+    # errors.jsonl is append-only, not replace-whole-file, so it does not go
+    # through write_json_atomic -- patch the actual append primitive.
+    def _boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(continuity_module, "_append_error_line", _boom)
 
 
 def test_record_then_query_by_matching_symptom(tmp_path):
@@ -36,24 +47,51 @@ def test_multiple_entries_all_queryable(tmp_path):
     assert len(prior_failures(str(tmp_path), "inert")) == 1
 
 
-def test_record_error_falls_back_when_the_primary_write_fails(tmp_path, monkeypatch):
-    """A write failure must not lose the record, and must not raise into the
-    caller either -- record_error is never-raises internally."""
+def test_record_error_returns_true_when_the_primary_write_lands(tmp_path):
+    assert record_error(str(tmp_path), what_tried = "a", why_failed = "b", symptom = "c") is True
+
+
+def test_record_error_with_no_fallback_path_reports_the_loss_and_writes_nowhere(tmp_path, monkeypatch):
+    """The app tool's shape: no fallback_path. When the primary write fails the
+    entry is genuinely lost, and record_error must say so -- not claim success,
+    and not quietly write model-controlled text to a file outside the sandbox."""
+    _fail_the_primary_write(monkeypatch)
     fallback_calls = []
-    monkeypatch.setattr(
-        continuity_module, "_append_fallback_note",
-        lambda text: fallback_calls.append(text),
-    )
+    monkeypatch.setattr(continuity_module, "_append_fallback_note",
+                        lambda path, text: fallback_calls.append((path, text)) or True)
+    before = sorted(tmp_path.rglob("*"))
 
-    def _boom(*a, **k):
-        raise OSError("disk full")
+    recorded = record_error(str(tmp_path), what_tried = "x", why_failed = "y", symptom = "z")
 
-    monkeypatch.setattr(continuity_module.storage, "write_json_atomic", _boom)
-    # errors.jsonl append does not go through write_json_atomic (it is an
-    # append-only file, not a replace-whole-file one) -- patch the actual append
-    # primitive instead. See the implementation step below for its name.
-    monkeypatch.setattr(continuity_module, "_append_error_line", _boom)
+    assert recorded is False
+    assert fallback_calls == [], f"wrote a fallback note nobody asked for: {fallback_calls}"
+    assert sorted(tmp_path.rglob("*")) == before
+    assert not hasattr(continuity_module, "_REMEMBER_NOW_PATH"), \
+        "the core must not hardcode a fallback target; only the CLI knows that path"
 
-    record_error(str(tmp_path), what_tried = "x", why_failed = "y", symptom = "z")
-    assert len(fallback_calls) == 1
-    assert "x" in fallback_calls[0] and "y" in fallback_calls[0]
+
+def test_record_error_with_a_fallback_path_lands_there_when_the_primary_write_fails(tmp_path, monkeypatch):
+    """The CLI's shape: a human on their own machine opts in to a fallback file."""
+    _fail_the_primary_write(monkeypatch)
+    fallback = tmp_path / "remember" / "now.md"
+
+    recorded = record_error(str(tmp_path), what_tried = "loose regex", why_failed = "matched both",
+                            symptom = "inert control", fallback_path = str(fallback))
+
+    assert recorded is True
+    text = fallback.read_text(encoding = "utf-8")
+    assert "loose regex" in text and "matched both" in text
+
+
+def test_record_error_reports_false_when_the_fallback_fails_too(tmp_path, monkeypatch):
+    """Both writes fail: still never raises, and says so rather than claiming success.
+    The fallback fails for real here (its directory would have to be a plain file),
+    so _append_fallback_note's own failure branch is exercised, not stubbed."""
+    _fail_the_primary_write(monkeypatch)
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a plain file where a directory would have to be", encoding = "utf-8")
+
+    recorded = record_error(str(tmp_path), what_tried = "x", why_failed = "y", symptom = "z",
+                            fallback_path = str(blocker / "now.md"))
+
+    assert recorded is False

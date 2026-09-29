@@ -10,8 +10,9 @@ whatever path it is given, the same way storage.py does.
 
 The core RAISES ContinuityError rather than guessing at recovery. Never-raises
 is each caller's own decision (the CLI catches and prints; the app tool catches
-and returns a string) -- this module does not have a bare except anywhere
-except inside record_error's fallback path, documented at that function.
+and returns a string) -- this module swallows exceptions in exactly two
+places: record_error with its fallback note (documented at record_error), and
+execute(), the app tool's own never-raises boundary.
 """
 
 from __future__ import annotations
@@ -153,10 +154,6 @@ def ready_tasks(project_dir: str) -> list[Task]:
 
 
 _ERRORS_FILENAME = "errors.jsonl"
-# The real fallback target. A test never writes here directly -- it monkeypatches
-# _append_fallback_note itself, so this path is only ever touched by a human
-# running the real CLI or app tool.
-_REMEMBER_NOW_PATH = os.path.expanduser(r"~\odysseus\.remember\now.md")
 
 
 def _errors_path(project_dir: str) -> str:
@@ -170,21 +167,41 @@ def _append_error_line(project_dir: str, entry: ErrorEntry) -> None:
         f.write(_json.dumps(entry.to_dict()) + "\n")
 
 
-def _append_fallback_note(text: str) -> None:
-    """Last resort: record_error's own write failed. Losing the record of a
-    failure is bad; crashing the caller over it is worse, so this is wrapped in
-    its own bare except and never propagates."""
+def _append_fallback_note(path: str, text: str) -> bool:
+    """Last resort: the primary write already failed. Losing the record of a
+    failure is bad; crashing the caller over it is worse, so this stays
+    never-raises -- but it reports whether the note landed rather than
+    pretending it always does."""
     try:
-        os.makedirs(os.path.dirname(_REMEMBER_NOW_PATH), exist_ok = True)
-        with open(_REMEMBER_NOW_PATH, "a", encoding = "utf-8") as f:
+        directory = os.path.dirname(path)
+        if directory:
+            os.makedirs(directory, exist_ok = True)
+        with open(path, "a", encoding = "utf-8") as f:
             f.write(text)
+        return True
     except BaseException:
-        pass
+        return False
 
 
-def record_error(project_dir: str, *, what_tried: str, why_failed: str, symptom: str) -> None:
-    """Never raises. A failed primary write falls back to .remember/now.md
-    rather than silently losing the record of a failure."""
+def record_error(
+    project_dir: str, *, what_tried: str, why_failed: str, symptom: str,
+    fallback_path: str | None = None,
+) -> bool:
+    """Never raises. Returns True if the entry landed somewhere findable (the
+    primary errors.jsonl, or -- only when the caller explicitly opts in by
+    passing fallback_path -- that file), False if it was lost entirely.
+
+    fallback_path is caller-supplied, not a hardcoded default: this function
+    has two real callers with different trust levels. The CLI runs as the
+    user on their own machine and may reasonably pass ~/odysseus/.remember/now.md
+    (still their own file, in their own home directory). The app-side tool is
+    driven by a model with no approval gate on THIS call, so it must pass
+    nothing -- writing model-controlled text outside the conversation's own
+    sandbox on a write failure would be an exfiltration channel, not a safety
+    net. When fallback_path is None and the primary write fails, the entry is
+    genuinely lost, and this function says so honestly rather than claiming
+    success.
+    """
     entry = ErrorEntry(
         ts = datetime.datetime.now(datetime.timezone.utc).isoformat(),
         project = os.path.basename(os.path.normpath(project_dir)),
@@ -192,10 +209,14 @@ def record_error(project_dir: str, *, what_tried: str, why_failed: str, symptom:
     )
     try:
         _append_error_line(project_dir, entry)
+        return True
     except BaseException:
+        if fallback_path is None:
+            return False
         now = datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M")
-        _append_fallback_note(
-            f"\n## {now} | continuity-fallback\n{what_tried} -- FAILED: {why_failed}\n"
+        return _append_fallback_note(
+            fallback_path,
+            f"\n## {now} | continuity-fallback\n{what_tried} -- FAILED: {why_failed}\n",
         )
 
 
@@ -429,13 +450,18 @@ def _execute(arguments, *, session_id: str | None) -> str:
         return f"Task {task_id!r} is now {status!r}."
 
     if action == "record_error":
-        record_error(
+        # No fallback_path, deliberately -- see record_error's docstring.
+        recorded = record_error(
             project_dir,
             what_tried = str(args.get("what_tried") or ""),
             why_failed = str(args.get("why_failed") or ""),
             symptom = str(args.get("symptom") or ""),
         )
-        return "Recorded."
+        return "Recorded." if recorded else (
+            "Error: could not record this -- the write failed and there is nowhere else "
+            "to put it. The failure itself was not lost silently; it just could not be "
+            "written down."
+        )
 
     if action == "check_prior_failures":
         hits = prior_failures(project_dir, str(args.get("symptom") or ""))
