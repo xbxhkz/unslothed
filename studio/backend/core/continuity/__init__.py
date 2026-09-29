@@ -216,3 +216,43 @@ def prior_failures(project_dir: str, symptom_query: str) -> list[ErrorEntry]:
             if query in entry.symptom.lower():
                 hits.append(entry)
     return hits
+
+
+import time
+import uuid as _uuid
+
+_DEFAULT_CHECKPOINT_RETAIN = 20
+
+
+def checkpoint(project_dir: str, note: str, *, retain: int = _DEFAULT_CHECKPOINT_RETAIN) -> str:
+    """Snapshot project_state.json plus a note. Returns the written filename.
+    Pruned to the RETAIN most recently written checkpoints -- ordered by a
+    sequence number baked into the filename, not by os.listdir's order, which
+    is not creation order on every filesystem."""
+    state = load_state(project_dir)
+    checkpoints_dir = os.path.join(storage.ai_dir(project_dir), "checkpoints")
+    existing = sorted(
+        (p for p in os.listdir(checkpoints_dir) if p.endswith(".json")),
+        key = lambda p: int(p.split("-", 1)[0]),
+    )
+    next_seq = (int(existing[-1].split("-", 1)[0]) + 1) if existing else 0
+    filename = f"{next_seq:08d}-{_uuid.uuid4().hex[:8]}.json"
+    payload = {
+        "seq": next_seq,
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "note": note,
+        "state": state.to_dict() if state is not None else None,
+    }
+    storage.write_json_atomic(os.path.join(checkpoints_dir, filename), payload)
+
+    all_now = sorted(
+        (p for p in os.listdir(checkpoints_dir) if p.endswith(".json")),
+        key = lambda p: int(p.split("-", 1)[0]),
+    )
+    if len(all_now) > retain:
+        for stale in all_now[: len(all_now) - retain]:
+            try:
+                os.unlink(os.path.join(checkpoints_dir, stale))
+            except OSError:
+                pass
+    return filename
