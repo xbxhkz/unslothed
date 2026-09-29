@@ -301,13 +301,21 @@ def validate(project_dir: str) -> list[str]:
 
     try:
         state = load_state(project_dir)
-    except ContinuityError as exc:
+    except (ContinuityError, TypeError, AttributeError, KeyError) as exc:
+        # Broader than ContinuityError on purpose: read_json returns whatever
+        # valid JSON it finds (e.g. a bare 42), and from_dict's _require then
+        # raises TypeError/AttributeError/KeyError trying to treat a non-dict
+        # as a dict, not ContinuityError. validate's job is to survive that
+        # too -- ContinuityError alone is correct for every other caller of
+        # load_state/load_tasks (they should get a hard failure on malformed
+        # data), but validate is specifically the "bulletproof against
+        # garbage input" function, so its own net is wider than theirs.
         problems.append(f"project_state.json: {exc}")
         state = None
 
     try:
         tasks = load_tasks(project_dir).tasks
-    except ContinuityError as exc:
+    except (ContinuityError, TypeError, AttributeError, KeyError) as exc:
         problems.append(f"task_queue.json: {exc}")
         tasks = []
 
