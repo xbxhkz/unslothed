@@ -3676,6 +3676,16 @@ async def _select_request_tools(
             DELEGATION_TOOL_NAMES,
             CONTINUITY_TOOL_NAMES,
         )
+        # fork: this line itself IS edited in place (not added beside), unlike every
+        # other seam rebind in this file -- test_tool_readiness_seam.py's
+        # _route_addable() requires exactly one "_addable ="-prefixed line, parsed
+        # as a single line split on "|", so a second rebind statement or a wrapped
+        # multi-line union would both break it. The seam's real additive guarantee
+        # is measured against git merge-base origin/main HEAD (zero upstream
+        # deletions), not against the immediately-prior fork commit -- this line has
+        # no upstream form to delete from, since _addable is itself fork-owned.
+        # Next task extending this set: add your *_TOOL_NAMES to the import tuple
+        # above and to this union, in place, same as every task before you.
         _addable = ASSIST_VISION_TOOL_NAMES | ASSIST_CODE_TOOL_NAMES | READINESS_TOOL_NAMES | CAPABILITY_TOOL_NAMES | DELEGATION_TOOL_NAMES | CONTINUITY_TOOL_NAMES
         _already = {t["function"]["name"] for t in tools}
         tools = tools + [
