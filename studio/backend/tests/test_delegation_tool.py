@@ -295,12 +295,56 @@ def test_the_delegate_is_not_given_the_delegation_tool_for_real():
     assert "terminal" in names, "the delegate still gets the ordinary tools"
 
 
-def test_the_delegate_gets_the_registry_minus_exactly_one():
-    """'Everything except ask_model' as a fact rather than a comment: it fails
-    loudly if a future tool is accidentally filtered out too."""
+def test_the_delegate_gets_the_registry_minus_ask_model_and_continuity_task():
+    """'Everything except ask_model and continuity_task' as a fact rather than a
+    comment: it fails loudly if a future tool is accidentally filtered out too.
+
+    continuity_task is filtered because it would otherwise resolve to the
+    PRIMARY's own sandbox -- the delegate runs with the primary's session_id --
+    and let a different, unapproved-per-call model rewrite the primary's task
+    graph. Spec section 7 puts delegate write-back out of scope pending its own
+    ownership design."""
+    from core.continuity.schemas_tool import CONTINUITY_TOOL_NAMES
     from core.inference.tools import ALL_TOOLS
 
-    assert len(delegation._delegate_tools()) == len(ALL_TOOLS) - 1
+    delegate_tools = delegation._delegate_tools()
+    names = {t["function"]["name"] for t in delegate_tools}
+    assert "ask_model" not in names
+    assert "continuity_task" not in names
+    assert len(delegate_tools) == len(ALL_TOOLS) - 1 - len(CONTINUITY_TOOL_NAMES)
+
+
+def test_a_delegate_that_names_continuity_task_anyway_never_reaches_it(rig, monkeypatch, recorded_tools):
+    """The filter above decides only what the delegate is OFFERED. run_subagent
+    executes whatever name the delegate's model emits -- it never checks the
+    name against the list it was given -- so a delegate that names
+    continuity_task anyway (the primary's brief can mention it by name) would
+    otherwise reach the primary's own continuity state: the dispatch forwards
+    the primary's session_id AND thread_id (see _TOOL_PASSTHROUGH). Driven
+    through the REAL tools.execute_tool, the only production caller."""
+    import core.inference.tools as tools_module
+
+    seen = {}
+
+    def call_model(messages, tools):
+        if "offered" not in seen:
+            seen["offered"] = {t["function"]["name"] for t in tools}
+            return {"content": "", "tool_calls": [{"id": "c1", "function": {
+                "name": "continuity_task",
+                "arguments": {"action": "add_task", "id": "planted"},
+            }}]}
+        seen["tool_result"] = messages[-1]["content"]
+        return {"content": "delegate answer", "tool_calls": []}
+
+    monkeypatch.setattr(delegation, "_call_model_for", lambda binding: call_model)
+    out = tools_module.execute_tool("ask_model", {"role": "coding", "task": "t"},
+                                    session_id = "s1", thread_id = "t1")
+    assert "delegate answer" in out, out
+    assert "continuity_task" not in seen["offered"], "the delegate was offered continuity_task"
+    reached = [name for name, _arguments, _kwargs in recorded_tools.calls]
+    assert "continuity_task" not in reached, "a delegate's continuity_task call reached execute_tool"
+    assert seen["tool_result"].startswith("Error"), seen["tool_result"]
+    assert "continuity_task" in seen["tool_result"], seen["tool_result"]
 
 
 def test_the_window_cap_refuses_a_third_delegation(rig):

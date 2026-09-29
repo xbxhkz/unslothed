@@ -506,10 +506,19 @@ def _left_loaded_note(delegate: Optional[str]) -> str:
 
 
 def _delegate_tools() -> list:
-    """Everything the primary can use, minus delegation itself."""
+    """Everything the primary can use, minus delegation and continuity itself.
+
+    continuity_task is excluded because a delegate runs with the primary's own
+    session_id and thread_id, so it would resolve to the PRIMARY's .ai/ and let a
+    different model -- with no per-call approval gate, by design -- rewrite the
+    primary's task graph. Delegate write-back is out of scope (spec section 7)
+    until it has its own ownership design. This decides only what the delegate is
+    OFFERED; _delegate_execute_tool refuses the same names when they are called."""
+    from core.continuity.schemas_tool import CONTINUITY_TOOL_NAMES
     from core.inference.tools import ALL_TOOLS
 
-    return [t for t in ALL_TOOLS if t.get("function", {}).get("name") not in DELEGATION_TOOL_NAMES]
+    excluded = DELEGATION_TOOL_NAMES | CONTINUITY_TOOL_NAMES
+    return [t for t in ALL_TOOLS if t.get("function", {}).get("name") not in excluded]
 
 
 def _delegate_execute_tool(*, cancel_event = None):
@@ -534,9 +543,19 @@ def _delegate_execute_tool(*, cancel_event = None):
     prompts for the DELEGATION -- a role and a task the user can actually read --
     before any of this runs. See the module docstring for what that approval covers.
     """
+    from core.continuity.schemas_tool import CONTINUITY_TOOL_NAMES
     from core.inference.tools import execute_tool
 
     def run(name, arguments, **kwargs) -> str:
+        # Not offered (see _delegate_tools), and refused here too: run_subagent
+        # executes whatever name the model emits, so a filter on the offer alone
+        # is a request, not a boundary.
+        if name in CONTINUITY_TOOL_NAMES:
+            return (
+                f"Error: {name} is not available to a delegate -- it holds the task "
+                "state of the model you are working for. Record your progress in "
+                "your work file instead."
+            )
         kwargs.setdefault("cancel_event", cancel_event)
         return execute_tool(name, arguments, **kwargs)
 
