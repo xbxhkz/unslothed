@@ -374,3 +374,77 @@ def _write_text(path: str, text: str) -> None:
         except OSError:
             pass
         raise
+
+
+def execute(name: str, arguments, *, session_id: str | None = None, **kwargs) -> str:
+    """Handler for continuity_task. Never raises -- a continuity read/write
+    failure must degrade the turn, not break it, the same never-raises
+    boundary every other built-in tool in this fork keeps at its execute()."""
+    try:
+        return _execute(arguments, session_id = session_id)
+    except BaseException as exc:  # noqa: BLE001 - a continuity failure must not break the turn
+        return f"Error: continuity_task failed: {exc}"
+
+
+def _execute(arguments, *, session_id: str | None) -> str:
+    from core.continuity.sandbox import confine_project_dir
+
+    args = arguments if isinstance(arguments, dict) else {}
+    action = str(args.get("action") or "").strip()
+    project_dir = confine_project_dir(session_id)
+
+    if action == "status":
+        from core.continuity.render import render_context_summary
+        summary = render_context_summary(project_dir)
+        if load_state(project_dir) is None:
+            # continuity_task exposes no write_state/init action, so a
+            # session that only ever calls add_task never gets a
+            # project_state.json -- render_context_summary's early return
+            # (Task 7) would then hide every task it has recorded. Fall back
+            # to a plain task list so status still reflects what was tracked.
+            tasks = load_tasks(project_dir).tasks
+            if tasks:
+                lines = [summary, "", "## Tasks"]
+                lines += [f"- [{t.status}] {t.id}: {t.title}" for t in tasks]
+                summary = "\n".join(lines)
+        return summary
+
+    if action == "add_task":
+        task_id = str(args.get("id") or "").strip()
+        if not task_id:
+            return "Error: add_task needs an id."
+        add_task(project_dir, Task(
+            id = task_id, title = str(args.get("title") or task_id), status = "pending",
+            depends_on = list(args.get("depends_on") or []),
+            acceptance_criteria = list(args.get("acceptance_criteria") or []),
+        ))
+        return f"Added task {task_id!r}."
+
+    if action == "set_status":
+        task_id = str(args.get("id") or "").strip()
+        status = str(args.get("status") or "").strip()
+        if not task_id or not status:
+            return "Error: set_status needs an id and a status."
+        set_task_status(project_dir, task_id, status)
+        return f"Task {task_id!r} is now {status!r}."
+
+    if action == "record_error":
+        record_error(
+            project_dir,
+            what_tried = str(args.get("what_tried") or ""),
+            why_failed = str(args.get("why_failed") or ""),
+            symptom = str(args.get("symptom") or ""),
+        )
+        return "Recorded."
+
+    if action == "check_prior_failures":
+        hits = prior_failures(project_dir, str(args.get("symptom") or ""))
+        if not hits:
+            return "No prior recorded failures match that."
+        return "\n".join(f"- {h.what_tried} -- {h.why_failed}" for h in hits)
+
+    if action == "checkpoint":
+        name = checkpoint(project_dir, str(args.get("note") or ""))
+        return f"Checkpointed as {name}."
+
+    return f"Error: unknown continuity_task action {action!r}."
