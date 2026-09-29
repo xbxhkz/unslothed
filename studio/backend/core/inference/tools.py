@@ -4540,6 +4540,12 @@ _ALWAYS_SAFE_TOOLS = frozenset({"web_search", "search_knowledge_base", "search_c
 # the rebind is seen -- verified by running it, not assumed.
 _ALWAYS_SAFE_TOOLS = _ALWAYS_SAFE_TOOLS | frozenset({"check_tool_readiness", "find_capability"})
 
+# fork: additive rebind. continuity_task reads and writes only local sandboxed
+# files (core/continuity/), no network, no code execution -- unlike ask_model,
+# which is deliberately NOT on this list because it loads models and can edit
+# files through its delegate.
+_ALWAYS_SAFE_TOOLS = _ALWAYS_SAFE_TOOLS | frozenset({"continuity_task"})
+
 
 def is_always_safe_tool(name: str) -> bool:
     """True for tools that never need an auto-mode prompt on any arguments, so a
@@ -9842,6 +9848,7 @@ from core.inference.assist_code import ASSIST_CODE_TOOLS, ASSIST_CODE_TOOL_NAMES
 from core.inference.tool_readiness.schemas import READINESS_TOOLS, READINESS_TOOL_NAMES
 from core.inference.capability_map.schemas import CAPABILITY_TOOLS, CAPABILITY_TOOL_NAMES
 from core.inference.delegation.schemas import DELEGATION_TOOLS, DELEGATION_TOOL_NAMES
+from core.continuity.schemas_tool import CONTINUITY_TOOLS, CONTINUITY_TOOL_NAMES
 
 ALL_TOOLS = [
     WEB_SEARCH_TOOL,
@@ -9856,6 +9863,7 @@ ALL_TOOLS = [
     *READINESS_TOOLS,
     *CAPABILITY_TOOLS,
     *DELEGATION_TOOLS,
+    *CONTINUITY_TOOLS,
 ]
 
 
@@ -10111,6 +10119,9 @@ def execute_tool(
             conversation_budget_tokens = conversation_budget_tokens,
             conversation_token_counter = conversation_token_counter,
         )
+    if name in CONTINUITY_TOOL_NAMES:
+        from core.continuity import execute as _continuity_execute
+        return _continuity_execute(name, arguments, session_id = session_id)
     if name == "search_knowledge_base":
         return _search_knowledge_base_with_budget(
             arguments,

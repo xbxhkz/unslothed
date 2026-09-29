@@ -3674,8 +3674,9 @@ async def _select_request_tools(
             READINESS_TOOL_NAMES,
             CAPABILITY_TOOL_NAMES,
             DELEGATION_TOOL_NAMES,
+            CONTINUITY_TOOL_NAMES,
         )
-        _addable = ASSIST_VISION_TOOL_NAMES | ASSIST_CODE_TOOL_NAMES | READINESS_TOOL_NAMES | CAPABILITY_TOOL_NAMES | DELEGATION_TOOL_NAMES
+        _addable = ASSIST_VISION_TOOL_NAMES | ASSIST_CODE_TOOL_NAMES | READINESS_TOOL_NAMES | CAPABILITY_TOOL_NAMES | DELEGATION_TOOL_NAMES | CONTINUITY_TOOL_NAMES
         _already = {t["function"]["name"] for t in tools}
         tools = tools + [
             t for t in ALL_TOOLS
@@ -20049,6 +20050,12 @@ _ANTHROPIC_UNPROMPTED_SAFE_TOOLS = frozenset(
 # reading it: see test_readiness_is_unprompted_on_the_anthropic_channel.
 _ANTHROPIC_UNPROMPTED_SAFE_TOOLS = _ANTHROPIC_UNPROMPTED_SAFE_TOOLS | frozenset(
     {"check_tool_readiness", "find_capability"}
+)
+
+# fork: additive rebind, same reasoning as tools._ALWAYS_SAFE_TOOLS above --
+# continuity_task only reads/writes local sandboxed files.
+_ANTHROPIC_UNPROMPTED_SAFE_TOOLS = _ANTHROPIC_UNPROMPTED_SAFE_TOOLS | frozenset(
+    {"continuity_task"}
 )
 
 

@@ -97,8 +97,9 @@ def test_the_seam_stays_additive():
     assert stat, "no diff recorded for tools.py"
     insertions, deletions = int(stat[0]), int(stat[1])
     assert deletions == 0, f"tools.py lost {deletions} line(s) to the fork; the seam must be additive"
-    # Two more ceilings on this same file live in tests/test_tool_readiness_seam.py
-    # and tests/test_delegation_seam.py -- whoever next grows the seam needs to
-    # raise all three. Measured 114 insertions once capability_map and delegation
-    # both landed.
-    assert insertions <= 120, f"seam grew to {insertions} insertions; measured 114"
+    # Three more ceilings on this same file live in tests/test_tool_readiness_seam.py,
+    # tests/test_delegation_seam.py, and tests/test_continuity_seam.py -- whoever
+    # next grows the seam needs to raise all four. Measured 125 insertions once
+    # continuity_task's registration (Task 10) landed beside capability_map and
+    # delegation.
+    assert insertions <= 140, f"seam grew to {insertions} insertions; measured 125"

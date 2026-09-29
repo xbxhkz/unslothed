@@ -110,14 +110,17 @@ def test_the_seams_stay_additive():
     base = subprocess.run(["git", "merge-base", "origin/main", "HEAD"], cwd = repo,
                           capture_output = True, text = True, check = True).stdout.strip()
     for path, ceiling in (
-        # tools.py measured 114 insertions when the delegation dispatch was
-        # widened to forward the execution context. Two more ceilings on this
-        # same file live in tests/test_tool_audit_seam.py and
-        # tests/test_tool_readiness_seam.py -- whoever grows the seam next has
-        # to raise all three. The deletions == 0 assertion below is the
-        # load-bearing half; the ceiling only stops the seam creeping.
-        ("studio/backend/core/inference/tools.py", 120),
-        ("studio/backend/routes/inference.py", 70),
+        # tools.py measured 125 insertions once continuity_task's registration
+        # (Task 10) landed beside delegation's. Three more ceilings on this
+        # same file live in tests/test_tool_audit_seam.py,
+        # tests/test_tool_readiness_seam.py, and tests/test_continuity_seam.py
+        # -- whoever grows the seam next has to raise all four. The
+        # deletions == 0 assertion below is the load-bearing half; the
+        # ceiling only stops the seam creeping.
+        # routes/inference.py measured 67 insertions for the same reason; its
+        # only other ceiling lives in tests/test_continuity_seam.py.
+        ("studio/backend/core/inference/tools.py", 140),
+        ("studio/backend/routes/inference.py", 80),
         ("studio/backend/main.py", 10),
     ):
         stat = subprocess.run(["git", "diff", "--numstat", base, "--", path], cwd = repo,
