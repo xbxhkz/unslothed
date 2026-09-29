@@ -17,10 +17,16 @@ except inside record_error's fallback path, documented at that function.
 from __future__ import annotations
 
 import dataclasses
+import datetime
+import json as _json
 import os
+import sys
 
 from core.continuity import storage
-from core.continuity.schemas import ContinuityError, ProjectState, Task, TaskQueue
+from core.continuity.schemas import ContinuityError, ErrorEntry, ProjectState, Task, TaskQueue
+
+# Allow tests to import this module using: from core.continuity import __init__
+__init__ = sys.modules[__name__]
 
 _STATE_FILENAME = "project_state.json"
 
@@ -144,3 +150,69 @@ def ready_tasks(project_dir: str) -> list[Task]:
         t for t in queue.tasks
         if t.status == "pending" and all(d in complete_ids for d in t.depends_on)
     ]
+
+
+_ERRORS_FILENAME = "errors.jsonl"
+# The real fallback target. A test never writes here directly -- it monkeypatches
+# _append_fallback_note itself, so this path is only ever touched by a human
+# running the real CLI or app tool.
+_REMEMBER_NOW_PATH = os.path.expanduser(r"~\odysseus\.remember\now.md")
+
+
+def _errors_path(project_dir: str) -> str:
+    return os.path.join(storage.ai_dir(project_dir), "logs", _ERRORS_FILENAME)
+
+
+def _append_error_line(project_dir: str, entry: ErrorEntry) -> None:
+    path = _errors_path(project_dir)
+    os.makedirs(os.path.dirname(path), exist_ok = True)
+    with open(path, "a", encoding = "utf-8") as f:
+        f.write(_json.dumps(entry.to_dict()) + "\n")
+
+
+def _append_fallback_note(text: str) -> None:
+    """Last resort: record_error's own write failed. Losing the record of a
+    failure is bad; crashing the caller over it is worse, so this is wrapped in
+    its own bare except and never propagates."""
+    try:
+        os.makedirs(os.path.dirname(_REMEMBER_NOW_PATH), exist_ok = True)
+        with open(_REMEMBER_NOW_PATH, "a", encoding = "utf-8") as f:
+            f.write(text)
+    except BaseException:
+        pass
+
+
+def record_error(project_dir: str, *, what_tried: str, why_failed: str, symptom: str) -> None:
+    """Never raises. A failed primary write falls back to .remember/now.md
+    rather than silently losing the record of a failure."""
+    entry = ErrorEntry(
+        ts = datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        project = os.path.basename(os.path.normpath(project_dir)),
+        what_tried = what_tried, why_failed = why_failed, symptom = symptom,
+    )
+    try:
+        _append_error_line(project_dir, entry)
+    except BaseException:
+        now = datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M")
+        _append_fallback_note(
+            f"\n## {now} | continuity-fallback\n{what_tried} -- FAILED: {why_failed}\n"
+        )
+
+
+def prior_failures(project_dir: str, symptom_query: str) -> list[ErrorEntry]:
+    path = _errors_path(project_dir)
+    if not os.path.isfile(path):
+        return []
+    query = symptom_query.strip().lower()
+    if not query:
+        return []
+    hits = []
+    with open(path, encoding = "utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            entry = ErrorEntry.from_dict(_json.loads(line))
+            if query in entry.symptom.lower():
+                hits.append(entry)
+    return hits
