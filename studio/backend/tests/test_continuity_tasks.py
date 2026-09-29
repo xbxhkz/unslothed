@@ -3,8 +3,10 @@
 
 """task_queue.json: add, transitions, derived readiness.
 
-"ready" is never a stored value -- test_ready_tasks_is_derived_not_stored below
-is the one that would catch a future change that starts persisting it."""
+"ready" is never a stored value: it is absent from the transition table, so
+set_task_status refuses it outright (test_set_task_status_refuses_ready_as_a_write_target),
+and test_ready_tasks_is_derived_not_stored is the one that would catch a future
+change that starts persisting it some other way."""
 
 from __future__ import annotations
 
@@ -50,7 +52,6 @@ def test_ready_tasks_is_derived_not_stored(tmp_path):
     add_task(str(tmp_path), _task("t1", status = "pending"))
     add_task(str(tmp_path), _task("t2", status = "pending", depends_on = ["t1"]))
     assert [t.id for t in ready_tasks(str(tmp_path))] == ["t1"]
-    set_task_status(str(tmp_path), "t1", "ready")
     set_task_status(str(tmp_path), "t1", "in_progress")
     set_task_status(str(tmp_path), "t1", "complete")
     # t2's status field is still "pending" on disk; readiness is computed, not read.
@@ -68,7 +69,6 @@ def test_illegal_transition_raises(tmp_path):
 
 def test_complete_requires_non_empty_acceptance_criteria(tmp_path):
     add_task(str(tmp_path), _task("t1", status = "pending", acceptance_criteria = []))
-    set_task_status(str(tmp_path), "t1", "ready")
     set_task_status(str(tmp_path), "t1", "in_progress")
     with pytest.raises(ContinuityError):
         set_task_status(str(tmp_path), "t1", "complete")
@@ -77,3 +77,13 @@ def test_complete_requires_non_empty_acceptance_criteria(tmp_path):
 def test_set_task_status_on_a_missing_id_raises(tmp_path):
     with pytest.raises(ContinuityError):
         set_task_status(str(tmp_path), "nope", "in_progress")
+
+
+def test_set_task_status_refuses_ready_as_a_write_target(tmp_path):
+    """The other half of "derived, not stored": ready is not merely unused as
+    a transition target, it is actively refused if a caller tries to set it
+    explicitly -- there must be no way to create the second source of truth
+    the whole design exists to avoid."""
+    add_task(str(tmp_path), _task("t1", status = "pending"))
+    with pytest.raises(ContinuityError):
+        set_task_status(str(tmp_path), "t1", "ready")

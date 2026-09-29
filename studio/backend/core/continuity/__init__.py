@@ -57,18 +57,24 @@ def update_state(project_dir: str, **fields) -> ProjectState:
 
 _TASKS_FILENAME = "task_queue.json"
 
-# Legal edges. A task is promoted from "pending" to "ready" by an explicit
-# set_task_status call (e.g. once its prerequisites are satisfied outside this
-# graph, or a human queues it up) -- that is a distinct fact from what
-# ready_tasks() answers below, which is "which pending tasks' depends_on are
-# all complete right now". ready_tasks never reads or writes a "ready" status;
-# it is a pure query over depends_on + status computed fresh on every call, so
-# there is no way for a stored value and the derived one to disagree.
+# Legal edges. "ready" is NEVER a key here and never appears as a write
+# target -- it is a status a task can only be JUDGED to have (ready_tasks
+# computes it from depends_on + status), never one it can be SET to. Deriving
+# "ready" and then also allowing set_task_status(id, "ready") would be two
+# sources of truth for the same fact, able to disagree. Because "ready" is
+# absent from this dict, it is absent from _VALID_STATUSES too (built from
+# this dict's keys below), so set_task_status(id, "ready") is refused with
+# "unknown status" before the transition table is even consulted -- there is
+# no special-case check needed to keep the promise this comment makes.
+#
+# Concretely: a pending task goes straight to in_progress once a caller has
+# decided (typically by first calling ready_tasks()) that it is unblocked --
+# there is no intermediate stored state to pass through. blocked returns to
+# pending, not to a "ready" it was never blocked away from reaching that way.
 _TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"ready"},
-    "ready": {"in_progress"},
+    "pending": {"in_progress"},
     "in_progress": {"complete", "failed", "blocked"},
-    "blocked": {"ready"},
+    "blocked": {"pending"},
     "failed": {"abandoned", "pending"},
     "abandoned": set(),
     "complete": set(),
