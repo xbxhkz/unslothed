@@ -856,6 +856,17 @@ class _LoadState:
     # field) -- part of the build identity for the SAME reason gguf_filename is: two loads that
     # agree on every other field can still be running different weights if only this differs.
     transformer_prequant_path: Optional[str] = None
+    # The caller's RAW precision/speed requests, alongside the engaged values above -- the same
+    # idea as attention_request next to attention_backend. The parked-identity check compares a
+    # NEW request against these, never against the engaged fields: an "Auto" load (None) engages
+    # whatever the hardware ladder picks (e.g. "nvfp4"), so comparing the raw None of an identical
+    # repeat against that engaged value refused every default-settings restore. Speed rides along
+    # because it decides what an Auto precision request even means: Speed="off" pins the GGUF
+    # as-is (bit-exact), so an otherwise identical Auto request under a different speed can build
+    # a differently-quantised pipeline.
+    transformer_quant_request: Optional[str] = None
+    text_encoder_quant_request: Optional[str] = None
+    speed_mode_request: Optional[str] = None
 
 
 @dataclass
@@ -1875,7 +1886,7 @@ class DiffusionBackend:
     def _matches_parked_identity(
         self, *, repo_id, gguf_filename, base_repo, model_kind, transformer_quant,
         text_encoder_quant, cpu_offload, memory_mode, gpu_ordinal, loras,
-        transformer_prequant_path, family_name,
+        transformer_prequant_path, family_name, speed_mode,
     ) -> bool:
         """Conservative by construction: any field that doesn't match, or can't be compared,
         means "not the same model" -- restore only happens on a confirmed exact match. Serving
@@ -1913,8 +1924,18 @@ class DiffusionBackend:
             or state.gguf_filename != gguf_filename
             or state.base_repo != base_repo
             or state.kind != model_kind
-            or state.transformer_quant != transformer_quant
-            or state.text_encoder_quant != text_encoder_quant
+            # RAW request vs RAW request, never the engaged value: an Auto (None) load engages
+            # whatever the hardware ladder picked, and comparing an identical repeat's None
+            # against that refused every default-settings restore. Raw-vs-raw needs no
+            # normalisation to be safe: two spellings of one request only ever mismatch, which
+            # costs a cold reload, never a wrong restore.
+            or state.transformer_quant_request != transformer_quant
+            or state.text_encoder_quant_request != text_encoder_quant
+            # Speed decides what an Auto precision request resolves to (Speed="off" keeps the
+            # GGUF bit-exact, anything else lets the ladder quantise), so once the comparison
+            # above is on raw requests, the raw speed request has to match too -- else an
+            # explicit Speed="off" repeat would restore a pipeline Auto quantised.
+            or state.speed_mode_request != speed_mode
             or state.cpu_offload != cpu_offload
             or state.memory_mode != memory_mode
             or state.gpu_ordinal != gpu_ordinal
@@ -2021,7 +2042,7 @@ class DiffusionBackend:
                 text_encoder_quant = text_encoder_quant, cpu_offload = cpu_offload,
                 memory_mode = resolved_memory_mode, gpu_ordinal = gpu_ordinal, loras = loras,
                 transformer_prequant_path = transformer_prequant_path,
-                family_name = getattr(fam, "name", None),
+                family_name = getattr(fam, "name", None), speed_mode = speed_mode,
             ):
                 try:
                     memory_residency.restore_owner(gpu_arbiter.DIFFUSION, self.restore)
@@ -4550,6 +4571,11 @@ class DiffusionBackend:
                         resolved = resolved,
                         gguf_filename = gguf_filename,
                         transformer_prequant_path = transformer_prequant_path,
+                        # RAW requests (transformer_quant itself was rewritten by the tri-state
+                        # above), for the parked-identity check -- see the field comment.
+                        transformer_quant_request = transformer_quant_requested,
+                        text_encoder_quant_request = text_encoder_quant,
+                        speed_mode_request = speed_mode,
                         # Built from the artifact this load COMMITTED to, by the same helper
                         # _plan_memory used, so the generate-time re-check reuses it verbatim.
                         variant_hint = _image_variant_hint(

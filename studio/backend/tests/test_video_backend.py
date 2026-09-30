@@ -5320,6 +5320,10 @@ def _canonical_parked_video_state(pipe):
         offload_policy = OFFLOAD_NONE, parked = True, gguf_filename = "canon.gguf",
         transformer_quant = "fp8", text_encoder_quant = "fp8", memory_mode = "auto",
         gpu_ordinal = 0, h3_task = None,
+        # The RAW requests the identity check actually compares (review I1): an explicit fp8 pin
+        # that engaged as asked, so engaged and requested agree in the baseline.
+        transformer_quant_request = "fp8", text_encoder_quant_request = "fp8",
+        speed_mode_request = None,
     )
 
 
@@ -5329,6 +5333,7 @@ def _canonical_video_identity_kwargs():
         base_repo = "unsloth/canon-base", model_kind = "gguf",
         transformer_quant = "fp8", text_encoder_quant = "fp8",
         memory_mode = "auto", gpu_ordinal = 0, h3_task = None, family_name = "wan",
+        speed_mode = None,
     )
 
 
@@ -5349,7 +5354,85 @@ _VIDEO_IDENTITY_FIELD_MISMATCHES = [
     ("gpu_ordinal", {"gpu_ordinal": 1}, {}),
     ("h3_task", {"h3_task": "ref2va"}, {}),
     ("family_name", {"family_name": "ltx2"}, {}),
+    # Speed decides what an Auto precision request resolves to (Speed="off" = dense bf16), so it
+    # has to match once precision is compared as a raw request (review I1).
+    ("speed_mode", {"speed_mode": "off"}, {}),
 ]
+
+
+def test_matches_parked_identity_restores_an_auto_precision_load_the_ladder_upgraded():
+    # Review I1, the exact case that was broken: an Auto (None) request engaged nvfp4 / fp8, the
+    # state recorded the ENGAGED schemes, and an identical repeat (None again) never restored.
+    # Engaged and requested deliberately DISAGREE here, so this passes only on the raw request.
+    backend = VideoBackend()
+    backend._state = dataclasses.replace(
+        _canonical_parked_video_state(_RecordingPipe()),
+        transformer_quant = "nvfp4", transformer_quant_request = None,
+        text_encoder_quant = "fp8", text_encoder_quant_request = None,
+    )
+    kwargs = _canonical_video_identity_kwargs()
+    kwargs.update(transformer_quant = None, text_encoder_quant = None)
+    assert backend._matches_parked_identity(**kwargs) is True
+    # An explicit pin of the scheme the Auto load happened to engage is a different request.
+    kwargs.update(transformer_quant = "nvfp4")
+    assert backend._matches_parked_identity(**kwargs) is False
+
+
+def test_matches_parked_identity_refuses_an_explicit_speed_off_repeat_of_an_auto_load():
+    backend = VideoBackend()
+    backend._state = dataclasses.replace(
+        _canonical_parked_video_state(_RecordingPipe()),
+        transformer_quant = "nvfp4", transformer_quant_request = None, speed_mode_request = None,
+    )
+    kwargs = _canonical_video_identity_kwargs()
+    kwargs.update(transformer_quant = None, speed_mode = "off")
+    assert backend._matches_parked_identity(**kwargs) is False
+
+
+def test_a_real_load_records_the_raw_precision_and_speed_requests(fake_runtime, tmp_path):
+    # The construction site must store what the CALLER sent, not the tri-state's rewrite of it
+    # ("off" under Speed=off, "auto" otherwise), or every identical repeat mismatches.
+    (tmp_path / "model.gguf").write_bytes(b"weights")
+    backend = VideoBackend()
+    backend.load_pipeline(
+        str(tmp_path), gguf_filename = "model.gguf", base_repo = "Lightricks/LTX-2",
+        family_override = "ltx-2", speed_mode = "off",
+    )
+    state = backend._state
+    assert state.transformer_quant_request is None
+    assert state.text_encoder_quant_request is None
+    assert state.speed_mode_request == "off"
+
+
+def test_begin_load_restores_a_default_settings_repeat_whose_auto_quant_engaged(monkeypatch):
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+    from core.inference.video import _VideoLoadState
+    import core.inference.gpu_arbiter as arb
+
+    backend = VideoBackend()
+    fake_pipe = _RecordingPipe()
+    backend._state = _VideoLoadState(
+        pipe = fake_pipe, family = None, repo_id = "unsloth/same-repo", base_repo = "base",
+        device = "cuda", dtype = "float16", kind = "gguf",
+        offload_policy = OFFLOAD_NONE, parked = True, gguf_filename = "model.gguf",
+        memory_mode = "auto", gpu_ordinal = None, h3_task = None,
+        transformer_quant = "nvfp4", text_encoder_quant = "fp8",
+        transformer_quant_request = None, text_encoder_quant_request = None,
+    )
+    monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
+    restored = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.restore_owner",
+        lambda owner, restore: (restore(), restored.append(owner)),
+    )
+    run_load_calls = _mock_video_begin_load_collaborators(monkeypatch, backend)
+    monkeypatch.setattr(backend, "status", lambda: {})
+    monkeypatch.setattr(backend, "_state_device_target", lambda state: None)
+
+    backend.begin_load("unsloth/same-repo", gguf_filename = "model.gguf", model_kind = "gguf")
+    assert restored == [arb.VIDEO]
+    assert run_load_calls == []
+    assert fake_pipe.to_calls == ["cuda"]
 
 
 @pytest.mark.parametrize(

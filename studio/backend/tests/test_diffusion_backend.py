@@ -2957,6 +2957,10 @@ def _canonical_parked_state(pipe):
         # refused unconditionally (see _matches_parked_identity), so a genuinely restorable "every
         # field matches" scenario can only exist when neither side uses one.
         transformer_prequant_path = None,
+        # The RAW requests the identity check actually compares (review I1): an explicit fp8 pin
+        # that engaged as asked, so engaged and requested agree in the baseline.
+        transformer_quant_request = "fp8", text_encoder_quant_request = "fp8",
+        speed_mode_request = None,
     )
 
 
@@ -2966,7 +2970,7 @@ def _canonical_identity_kwargs():
         base_repo = "unsloth/canon-base", model_kind = "gguf",
         transformer_quant = "fp8", text_encoder_quant = "fp8", cpu_offload = False,
         memory_mode = "auto", gpu_ordinal = 0, loras = None,
-        transformer_prequant_path = None, family_name = "flux",
+        transformer_prequant_path = None, family_name = "flux", speed_mode = None,
     )
 
 
@@ -3005,6 +3009,9 @@ _IDENTITY_FIELD_MISMATCHES = [
         {"transformer_prequant_path": "/allowlisted/a-parked-only-transformer"},
     ),
     ("family_name", {"family_name": "qwen-image"}, {}),
+    # Speed decides what an Auto precision request resolves to (Speed="off" = GGUF bit-exact), so
+    # it has to match once precision is compared as a raw request (review I1).
+    ("speed_mode", {"speed_mode": "off"}, {}),
 ]
 
 
@@ -3028,6 +3035,93 @@ def test_matches_parked_identity_is_false_when_exactly_one_field_differs(
     assert backend._matches_parked_identity(**kwargs) is False, (
         f"{field} alone differing from the parked state must be enough to force a mismatch"
     )
+
+
+def test_matches_parked_identity_restores_an_auto_precision_load_the_ladder_upgraded():
+    # Review I1, the exact case that was broken: the UI sends None for "Auto", the hardware ladder
+    # engaged nvfp4 / fp8, and _LoadState recorded the ENGAGED schemes. An identical default-settings
+    # repeat (None again) was compared against "nvfp4" and never restored. Engaged and requested
+    # deliberately DISAGREE here, so this passes only if the check reads the raw request.
+    import dataclasses
+
+    backend = DiffusionBackend()
+    backend._state = dataclasses.replace(
+        _canonical_parked_state(_RecordingPipe()),
+        transformer_quant = "nvfp4", transformer_quant_request = None,
+        text_encoder_quant = "fp8", text_encoder_quant_request = None,
+    )
+    kwargs = _canonical_identity_kwargs()
+    kwargs.update(transformer_quant = None, text_encoder_quant = None)
+    assert backend._matches_parked_identity(**kwargs) is True
+    # ...and the same parked Auto load does NOT answer an explicit pin of the scheme it happened to
+    # engage: the request differs, so the (cheap, safe) answer is a cold load.
+    kwargs.update(transformer_quant = "nvfp4")
+    assert backend._matches_parked_identity(**kwargs) is False
+
+
+def test_matches_parked_identity_refuses_an_explicit_speed_off_repeat_of_an_auto_load():
+    # Why speed joined the identity with I1: an Auto (None) precision request under Speed=auto lets
+    # the ladder quantise, while the SAME None under Speed="off" pins the GGUF as-is (bit-exact).
+    # Raw precision alone would call these a match and restore the quantised pipeline.
+    import dataclasses
+
+    backend = DiffusionBackend()
+    backend._state = dataclasses.replace(
+        _canonical_parked_state(_RecordingPipe()),
+        transformer_quant = "nvfp4", transformer_quant_request = None, speed_mode_request = None,
+    )
+    kwargs = _canonical_identity_kwargs()
+    kwargs.update(transformer_quant = None, speed_mode = "off")
+    assert backend._matches_parked_identity(**kwargs) is False
+
+
+def test_a_real_load_records_the_raw_precision_and_speed_requests(fake_runtime, tmp_path):
+    # The construction site has to store what the CALLER sent, not the tri-state's rewrite of it:
+    # an omitted precision becomes "off" (Speed=off) or "auto" internally, and storing that would
+    # make every identical repeat (None again) mismatch -- the I1 bug in another spelling.
+    (tmp_path / "model.gguf").write_bytes(b"weights")
+    backend = DiffusionBackend()
+    backend.load_pipeline(
+        str(tmp_path), gguf_filename = "model.gguf", base_repo = "base/repo",
+        family_override = "z-image", speed_mode = "off",
+    )
+    state = backend._state
+    assert state.transformer_quant_request is None
+    assert state.text_encoder_quant_request is None
+    assert state.speed_mode_request == "off"
+
+
+def test_begin_load_restores_a_default_settings_repeat_whose_auto_quant_engaged(monkeypatch):
+    # End-to-end form of the I1 case: the parked load asked for nothing (Auto) and engaged nvfp4;
+    # the repeat asks for nothing again and must restore, not cold-load.
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+
+    backend = DiffusionBackend()
+    fake_pipe = _RecordingPipe()
+    backend._state = _LoadState(
+        fake_pipe, None, "unsloth/same-repo", "base", "cuda", "float16", False,
+        offload_policy = OFFLOAD_NONE, parked = True, kind = "gguf",
+        gguf_filename = "model.gguf", memory_mode = "auto", gpu_ordinal = None,
+        transformer_quant = "nvfp4", text_encoder_quant = "fp8",
+        transformer_quant_request = None, text_encoder_quant_request = None,
+    )
+    monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
+    restored = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.restore_owner",
+        lambda owner, restore: (restore(), restored.append(owner)),
+    )
+    run_load_calls = []
+    monkeypatch.setattr(backend, "_run_load", lambda **kw: run_load_calls.append(kw))
+    monkeypatch.setattr(backend, "validate_load_request", lambda *a, **k: types.SimpleNamespace(base_repo = "base"))
+    monkeypatch.setattr(backend, "assert_precision_available", lambda *a, **k: None)
+    monkeypatch.setattr(backend, "status", lambda: {})
+    monkeypatch.setattr(backend, "_state_device_target", lambda state: None)
+
+    backend.begin_load("unsloth/same-repo", gguf_filename = "model.gguf", model_kind = "gguf")
+    assert restored == [arb.DIFFUSION]
+    assert run_load_calls == []
+    assert fake_pipe.to_calls == ["cuda"]
 
 
 def test_matches_parked_identity_refuses_even_a_byte_identical_local_repo_id():

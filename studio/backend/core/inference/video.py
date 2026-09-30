@@ -543,6 +543,15 @@ class _VideoLoadState:
     # construction (including every test fixture already in this file) keeps working unchanged.
     parked: bool = False
     resident_mib: Optional[int] = None
+    # The caller's RAW precision/speed requests, alongside the engaged transformer_quant /
+    # text_encoder_quant above. The parked-identity check compares a NEW request against these,
+    # never against the engaged fields: an "Auto" load (None) engages whatever the hardware ladder
+    # picks, so comparing the raw None of an identical repeat against that engaged value refused
+    # every default-settings restore. Speed rides along because it decides what an Auto precision
+    # request resolves to (Speed="off" keeps the denoiser dense bf16). Mirrors the image backend.
+    transformer_quant_request: Optional[str] = None
+    text_encoder_quant_request: Optional[str] = None
+    speed_mode_request: Optional[str] = None
 
 
 @dataclass
@@ -1277,7 +1286,7 @@ class VideoBackend:
 
     def _matches_parked_identity(
         self, *, repo_id, gguf_filename, base_repo, model_kind, transformer_quant,
-        text_encoder_quant, memory_mode, gpu_ordinal, h3_task, family_name,
+        text_encoder_quant, memory_mode, gpu_ordinal, h3_task, family_name, speed_mode,
     ) -> bool:
         """Conservative by construction: any field that doesn't match, or can't be compared,
         means "not the same model" -- restore only happens on a confirmed exact match. Serving
@@ -1314,8 +1323,18 @@ class VideoBackend:
             or state.gguf_filename != gguf_filename
             or state.base_repo != base_repo
             or state.kind != model_kind
-            or state.transformer_quant != transformer_quant
-            or state.text_encoder_quant != text_encoder_quant
+            # RAW request vs RAW request, never the engaged value: an Auto (None) load engages
+            # whatever the hardware ladder picked, and comparing an identical repeat's None
+            # against that refused every default-settings restore. Raw-vs-raw needs no
+            # normalisation to be safe: two spellings of one request only ever mismatch, which
+            # costs a cold reload, never a wrong restore.
+            or state.transformer_quant_request != transformer_quant
+            or state.text_encoder_quant_request != text_encoder_quant
+            # Speed decides what an Auto precision request resolves to (Speed="off" keeps the
+            # denoiser dense bf16), so once the comparison above is on raw requests the raw speed
+            # request has to match too -- else a Speed="off" repeat could restore an Auto-quantised
+            # pipeline.
+            or state.speed_mode_request != speed_mode
             or state.memory_mode != memory_mode
             or state.gpu_ordinal != gpu_ordinal
             # MiniMax-H3 hosts two denoiser partitions -- keyframe (fl2va) and reference (ref2va)
@@ -1452,7 +1471,7 @@ class VideoBackend:
                 model_kind = resolved_kind, transformer_quant = transformer_quant,
                 text_encoder_quant = text_encoder_quant, memory_mode = resolved_memory_mode,
                 gpu_ordinal = gpu_ordinal, h3_task = resolved_h3_task,
-                family_name = getattr(fam, "name", None),
+                family_name = getattr(fam, "name", None), speed_mode = speed_mode,
             ):
                 try:
                     memory_residency.restore_owner(gpu_arbiter.VIDEO, self.restore)
@@ -4200,6 +4219,11 @@ class VideoBackend:
                     transformer_quant = transformer_quant_engaged,
                     text_encoder_quant = text_encoder_quant_engaged,
                     resolved = resolved,
+                    # RAW requests (transformer_quant itself was rewritten by the tri-state
+                    # above), for the parked-identity check -- see the field comment.
+                    transformer_quant_request = transformer_quant_requested,
+                    text_encoder_quant_request = text_encoder_quant,
+                    speed_mode_request = speed_mode,
                 )
                 # Ownership of the globals transferred to _state / _teardown_state_locked.
                 self._precommit_globals = None
@@ -4959,6 +4983,11 @@ class VideoBackend:
                 text_encoder_quant = text_encoder_quant_engaged,
                 h3_denoiser_pinned = denoiser_pinned,
                 resolved = resolved,
+                # RAW requests (this loader rewrites text_encoder_quant from its tri-state), for
+                # the parked-identity check -- see the field comment.
+                transformer_quant_request = transformer_quant_requested,
+                text_encoder_quant_request = text_encoder_quant_requested,
+                speed_mode_request = speed_mode,
             )
             # Ownership of the globals transferred to _state / _teardown_state_locked.
             self._precommit_globals = None
