@@ -2579,7 +2579,12 @@ def test_begin_load_cold_loads_when_only_the_prequant_path_differs(monkeypatch):
     # transformer_prequant_path "installs arbitrary weights into the served model" (its own field
     # description in models/inference.py): every OTHER identity field can match while this one
     # alone names a different local checkpoint, and restoring anyway would silently serve the
-    # OLD transformer instead of the one this request actually asked for.
+    # OLD transformer instead of the one this request actually asked for. (Any non-None prequant
+    # path on the request ALSO trips the unconditional local-path guard on its own regardless of
+    # whether the two paths differ -- see
+    # test_begin_load_cold_loads_when_the_repo_is_a_local_path_even_if_unchanged below for that
+    # distinct, blunter guarantee -- but this test's two DIFFERENT path strings mean the
+    # underlying equality clause is independently sufficient here too.)
     from core.inference.diffusion_memory import OFFLOAD_NONE
 
     backend = DiffusionBackend()
@@ -2617,6 +2622,133 @@ def test_begin_load_cold_loads_when_only_the_prequant_path_differs(monkeypatch):
     assert len(run_load_calls) == 1  # cold load proceeded, reading the NEWLY requested checkpoint
 
 
+def test_begin_load_cold_loads_when_the_repo_is_a_local_path_even_if_unchanged(monkeypatch):
+    # A local path can be overwritten IN PLACE (e.g. re-exporting a merged GGUF to the same
+    # output path) while the old pipeline sits parked -- nothing here can tell that happened
+    # without reading the file. So restoring is refused UNCONDITIONALLY whenever the request
+    # names a local path, even when the path string is byte-identical to what's parked. Distinct
+    # from test_begin_load_cold_loads_when_only_the_prequant_path_differs above, which tests "two
+    # DIFFERENT local paths mismatch": this one tests "even the SAME local path, restore is
+    # refused outright," because staleness can't be ruled out without reading the file.
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+
+    local_repo = str(Path("C:/models/local-pick") if sys.platform == "win32" else Path("/models/local-pick"))
+    backend = DiffusionBackend()
+    fake_pipe = _RecordingPipe()
+    backend._state = _LoadState(
+        fake_pipe, None, local_repo, local_repo, "cuda", "float16", False,
+        offload_policy = OFFLOAD_NONE, parked = True, kind = "gguf",
+        gguf_filename = "model.gguf", transformer_quant = None, text_encoder_quant = None,
+        memory_mode = "auto", gpu_ordinal = None,
+    )
+    monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
+    forgotten = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.forget_parked", lambda owner: forgotten.append(owner),
+    )
+    restore_called = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.restore_owner",
+        lambda owner, restore: restore_called.append(owner),
+    )
+    run_load_calls = []
+    monkeypatch.setattr(backend, "_run_load", lambda **kw: run_load_calls.append(kw))
+    monkeypatch.setattr(
+        backend, "validate_load_request", lambda *a, **k: types.SimpleNamespace(base_repo = local_repo),
+    )
+    monkeypatch.setattr(backend, "assert_precision_available", lambda *a, **k: None)
+
+    # The EXACT same local path as what's parked -- a pure string comparison would call this a match.
+    backend.begin_load(local_repo, gguf_filename = "model.gguf", model_kind = "gguf")
+    assert restore_called == []  # never attempted -- local-path involvement alone refuses it
+    assert forgotten == [arb.DIFFUSION]
+    assert len(run_load_calls) == 1  # cold load proceeded, re-reading the file from disk
+
+
+def test_begin_load_restores_a_pipeline_kind_load_whose_base_is_its_own_repo_id(monkeypatch):
+    # A pipeline-kind load's base IS the repo itself (load_pipeline never runs resolve_base_repo's
+    # family-default fallback for that kind) -- regression coverage for Minor 1: before that fix,
+    # begin_load unconditionally called resolve_base_repo(fam, base_repo), which would compare the
+    # FAMILY DEFAULT against state.base_repo == repo_id and mismatch on every genuine
+    # pipeline-kind repeat. The mocked family's base_repo below is deliberately a THIRD, different
+    # value, so a passing test proves the branch used repo_id, not the family fallback.
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+
+    backend = DiffusionBackend()
+    fake_pipe = _RecordingPipe()
+    backend._state = _LoadState(
+        fake_pipe, None, "unsloth/full-pipeline-repo", "unsloth/full-pipeline-repo",
+        "cuda", "float16", False,
+        offload_policy = OFFLOAD_NONE, parked = True, kind = "pipeline",
+        gguf_filename = None, transformer_quant = None, text_encoder_quant = None,
+        memory_mode = "auto", gpu_ordinal = None,
+    )
+    monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
+    restored = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.restore_owner",
+        lambda owner, restore: (restore(), restored.append(owner)),
+    )
+    run_load_calls = []
+    monkeypatch.setattr(backend, "_run_load", lambda **kw: run_load_calls.append(kw))
+    monkeypatch.setattr(
+        backend, "validate_load_request",
+        lambda *a, **k: types.SimpleNamespace(base_repo = "unsloth/some-other-family-default"),
+    )
+    monkeypatch.setattr(backend, "assert_precision_available", lambda *a, **k: None)
+    monkeypatch.setattr(backend, "status", lambda: {})
+
+    backend.begin_load("unsloth/full-pipeline-repo", model_kind = "pipeline")
+    assert restored == [arb.DIFFUSION]
+    assert run_load_calls == []
+
+
+def test_begin_load_cold_loads_when_the_resolved_family_name_differs(monkeypatch):
+    # Guards against a specific wiring bug: comparing against self._state's OWN family (which
+    # would trivially always match itself, silently defeating the check) instead of the family
+    # THIS request resolves to. family_override can route the SAME repo_id+gguf_filename through
+    # a DIFFERENT DiffusionFamily (e.g. an edit-family override vs. a text-to-image override on
+    # the same GGUF with the same explicit base_repo), which changes the pipeline class actually
+    # built -- every OTHER field below is identical to what's parked.
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+
+    backend = DiffusionBackend()
+    fake_pipe = _RecordingPipe()
+    backend._state = _LoadState(
+        fake_pipe, types.SimpleNamespace(name = "text-to-image-family"),
+        "unsloth/same-repo", "unsloth/same-base", "cuda", "float16", False,
+        offload_policy = OFFLOAD_NONE, parked = True, kind = "gguf",
+        gguf_filename = "model.gguf", transformer_quant = None, text_encoder_quant = None,
+        memory_mode = "auto", gpu_ordinal = None,
+    )
+    monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
+    forgotten = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.forget_parked", lambda owner: forgotten.append(owner),
+    )
+    restore_called = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.restore_owner",
+        lambda owner, restore: restore_called.append(owner),
+    )
+    run_load_calls = []
+    monkeypatch.setattr(backend, "_run_load", lambda **kw: run_load_calls.append(kw))
+    # The NEW request resolves to a DIFFERENT family -- repo_id/gguf_filename/base_repo all match.
+    monkeypatch.setattr(
+        backend, "validate_load_request",
+        lambda *a, **k: types.SimpleNamespace(base_repo = "unsloth/same-base", name = "edit-family"),
+    )
+    monkeypatch.setattr(backend, "assert_precision_available", lambda *a, **k: None)
+
+    backend.begin_load(
+        "unsloth/same-repo", gguf_filename = "model.gguf", model_kind = "gguf",
+        family_override = "edit-family",
+    )
+    assert restore_called == []  # never attempted -- the resolved family differs
+    assert forgotten == [arb.DIFFUSION]
+    assert len(run_load_calls) == 1
+
+
 # _matches_parked_identity field-by-field coverage: the 3 begin_load tests above only prove the
 # method is WIRED into begin_load (and the Step-7-style mutation control proves that too, for the
 # whole method at once) -- they don't prove each individual comparison clause actually matters.
@@ -2635,7 +2767,10 @@ def _canonical_parked_state(pipe):
         offload_policy = OFFLOAD_NONE, parked = True, kind = "gguf",
         gguf_filename = "canon.gguf", transformer_quant = "fp8", text_encoder_quant = "fp8",
         memory_mode = "auto", gpu_ordinal = 0,
-        transformer_prequant_path = "/allowlisted/canon-transformer",
+        # No prequant path in the canonical baseline: a request that names ANY local path is
+        # refused unconditionally (see _matches_parked_identity), so a genuinely restorable "every
+        # field matches" scenario can only exist when neither side uses one.
+        transformer_prequant_path = None,
     )
 
 
@@ -2645,7 +2780,7 @@ def _canonical_identity_kwargs():
         base_repo = "unsloth/canon-base", model_kind = "gguf",
         transformer_quant = "fp8", text_encoder_quant = "fp8", cpu_offload = False,
         memory_mode = "auto", gpu_ordinal = 0, loras = None,
-        transformer_prequant_path = "/allowlisted/canon-transformer", family_name = "flux",
+        transformer_prequant_path = None, family_name = "flux",
     )
 
 
@@ -2655,35 +2790,84 @@ def test_matches_parked_identity_is_true_when_every_field_matches():
     assert backend._matches_parked_identity(**_canonical_identity_kwargs()) is True
 
 
+# Most entries override a REQUEST kwarg away from the canonical baseline. transformer_prequant_path
+# is the exception: overriding the REQUEST's path to any non-None value would also trip the new
+# unconditional local-path guard (below), which fires independently of the equality clause and
+# would mask a regression IN that equality clause. So this entry instead overrides the STATE
+# (the parked pipeline itself used a prequant path; the new request names none at all), which the
+# unconditional guard -- keyed only on the REQUEST's own fields -- does not touch, isolating the
+# state.transformer_prequant_path != transformer_prequant_path comparison specifically.
 _IDENTITY_FIELD_MISMATCHES = [
-    ("repo_id", {"repo_id": "unsloth/a-different-repo"}),
-    ("gguf_filename", {"gguf_filename": "a-different.gguf"}),
-    ("base_repo", {"base_repo": "unsloth/a-different-base"}),
-    ("model_kind", {"model_kind": "single_file"}),
-    ("transformer_quant", {"transformer_quant": "int8"}),
-    ("text_encoder_quant", {"text_encoder_quant": "nvfp4"}),
-    ("cpu_offload", {"cpu_offload": True}),
-    ("memory_mode", {"memory_mode": "low_vram"}),
-    ("gpu_ordinal", {"gpu_ordinal": 1}),
-    ("loras", {"loras": [("adapter-x", 0.8)]}),
-    ("transformer_prequant_path", {"transformer_prequant_path": "/allowlisted/a-different-transformer"}),
-    ("family_name", {"family_name": "qwen-image"}),
+    ("repo_id", {"repo_id": "unsloth/a-different-repo"}, {}),
+    ("gguf_filename", {"gguf_filename": "a-different.gguf"}, {}),
+    ("base_repo", {"base_repo": "unsloth/a-different-base"}, {}),
+    ("model_kind", {"model_kind": "single_file"}, {}),
+    ("transformer_quant", {"transformer_quant": "int8"}, {}),
+    ("text_encoder_quant", {"text_encoder_quant": "nvfp4"}, {}),
+    ("cpu_offload", {"cpu_offload": True}, {}),
+    ("memory_mode", {"memory_mode": "low_vram"}, {}),
+    ("gpu_ordinal", {"gpu_ordinal": 1}, {}),
+    ("loras", {"loras": [("adapter-x", 0.8)]}, {}),
+    (
+        "transformer_prequant_path",
+        {},
+        {"transformer_prequant_path": "/allowlisted/a-parked-only-transformer"},
+    ),
+    ("family_name", {"family_name": "qwen-image"}, {}),
 ]
 
 
 @pytest.mark.parametrize(
-    "field, override",
+    "field, request_override, state_override",
     _IDENTITY_FIELD_MISMATCHES,
-    ids = [field for field, _ in _IDENTITY_FIELD_MISMATCHES],
+    ids = [field for field, _, _ in _IDENTITY_FIELD_MISMATCHES],
 )
-def test_matches_parked_identity_is_false_when_exactly_one_field_differs(field, override):
+def test_matches_parked_identity_is_false_when_exactly_one_field_differs(
+    field, request_override, state_override,
+):
+    import dataclasses
+
     backend = DiffusionBackend()
-    backend._state = _canonical_parked_state(_RecordingPipe())
+    state = _canonical_parked_state(_RecordingPipe())
+    if state_override:
+        state = dataclasses.replace(state, **state_override)
+    backend._state = state
     kwargs = _canonical_identity_kwargs()
-    kwargs.update(override)
+    kwargs.update(request_override)
     assert backend._matches_parked_identity(**kwargs) is False, (
         f"{field} alone differing from the parked state must be enough to force a mismatch"
     )
+
+
+def test_matches_parked_identity_refuses_even_a_byte_identical_local_repo_id():
+    # The unconditional local-path guard fires on the REQUEST's own fields, independent of
+    # whether they match what's parked: a local path can be overwritten in place while parked, so
+    # a textually-identical path string proves nothing about the file's current contents.
+    import dataclasses
+
+    backend = DiffusionBackend()
+    local_repo = str(Path("C:/models/local-pick") if sys.platform == "win32" else Path("/models/local-pick"))
+    state = dataclasses.replace(
+        _canonical_parked_state(_RecordingPipe()), repo_id = local_repo, base_repo = local_repo,
+    )
+    backend._state = state
+    kwargs = _canonical_identity_kwargs()
+    kwargs.update(repo_id = local_repo, base_repo = local_repo)
+    assert backend._matches_parked_identity(**kwargs) is False
+
+
+def test_matches_parked_identity_refuses_even_a_byte_identical_prequant_path():
+    import dataclasses
+
+    backend = DiffusionBackend()
+    state = dataclasses.replace(
+        _canonical_parked_state(_RecordingPipe()),
+        transformer_prequant_path = "/allowlisted/canon-transformer",
+    )
+    backend._state = state
+    kwargs = _canonical_identity_kwargs()
+    kwargs.update(transformer_prequant_path = "/allowlisted/canon-transformer")
+    assert backend._matches_parked_identity(**kwargs) is False
 
 
 def test_prefetch_aborts_when_cancelled(tmp_path):

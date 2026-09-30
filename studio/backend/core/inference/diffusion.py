@@ -277,6 +277,19 @@ def resolve_model_kind(gguf_filename: Optional[str], model_kind: Optional[str] =
     return "single_file"
 
 
+def _is_local_path_shaped(value: Optional[str]) -> bool:
+    """True when ``value`` names a local filesystem path rather than a Hub repo id: a
+    ``"."``/``".."``/``"~"`` prefix, a backslash (never valid inside ``"org/name"``), or an
+    absolute path. Pure and filesystem-free (``Path.is_absolute()`` never touches disk) --
+    shared by ``validate_load_request``'s on-disk check and the parked-identity guard, which both
+    need to tell a local pick apart from a Hub one without stat'ing anything."""
+    if not value:
+        return False
+    return (
+        value.startswith(("/", "\\", "~", ".")) or "\\" in value or Path(value).expanduser().is_absolute()
+    )
+
+
 def _active_lora_pairs(pipe: Any) -> list:
     """``[(name, weight)]`` for the adapters actually attached to ``pipe``, zero-weight ones
     dropped.
@@ -1763,10 +1776,7 @@ class DiffusionBackend:
         _assert_local_base_is_pipeline(base_repo)
         # Reject a bad LOCAL pick before the route evicts chat: a path-shaped repo_id must be on disk.
         local_root = Path(repo_id).expanduser()
-        # Path-shaped: "."/".." prefix, a backslash (never in "org/name"), or an absolute path.
-        path_shaped = (
-            repo_id.startswith(("/", "\\", "~", ".")) or "\\" in repo_id or local_root.is_absolute()
-        )
+        path_shaped = _is_local_path_shaped(repo_id)
         if kind in ("gguf", "single_file"):
             if not gguf_filename:
                 raise ValueError(f"a single-file checkpoint name is required for a '{kind}' load.")
@@ -1854,6 +1864,22 @@ class DiffusionBackend:
         the wrong model's weights is the worst failure mode this whole piece could introduce."""
         state = self._state
         if state is None or not state.parked:
+            return False
+        # A local path can be overwritten IN PLACE on disk (e.g. re-exporting a merged GGUF to
+        # the same output path) while the old pipeline sits parked in RAM. Nothing here can tell
+        # that happened without reading the file, and restoring on a path string that merely
+        # LOOKS unchanged would silently serve the OLD weights with no error at all -- exactly
+        # the failure class this whole method exists to prevent. So any local-path involvement in
+        # THIS request refuses the restore outright and unconditionally, even when the path is
+        # byte-identical to what's parked: a Hub repo id has no "swap the bytes under the same
+        # name" surface, so this only narrows the fast path for picks that actually have one.
+        # transformer_prequant_path is always local per its own field description ("a local path
+        # installs arbitrary weights into the served model"), so its mere presence is enough.
+        if (
+            _is_local_path_shaped(repo_id)
+            or _is_local_path_shaped(base_repo)
+            or bool(transformer_prequant_path)
+        ):
             return False
         if (
             state.repo_id != repo_id
