@@ -2389,6 +2389,100 @@ def test_unload_sets_cancel_event(fake_runtime):
     assert backend._cancel_event.is_set()
 
 
+# park() / restore() / resident_footprint_mib() (Unified Memory core)
+
+
+class _RecordingPipe:
+    def __init__(self, raise_on_to = False):
+        self.to_calls = []
+        self._raise_on_to = raise_on_to
+
+    def to(self, device):
+        if self._raise_on_to:
+            raise RuntimeError("simulated .to() failure")
+        self.to_calls.append(device)
+        return self
+
+
+def test_park_moves_a_fully_resident_pipeline_to_cpu_and_keeps_state():
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+
+    backend = DiffusionBackend()
+    fake_pipe = _RecordingPipe()
+    backend._state = _LoadState(
+        fake_pipe, None, "repo", "base", "cuda", "float16", False,
+        offload_policy = OFFLOAD_NONE,
+    )
+    result = backend.park()
+    assert result is True
+    assert fake_pipe.to_calls == ["cpu"]
+    assert backend._state is not None
+    assert backend._state.parked is True
+
+
+def test_park_refuses_a_non_none_offload_policy():
+    from core.inference.diffusion_memory import OFFLOAD_GROUP
+
+    backend = DiffusionBackend()
+    fake_pipe = _RecordingPipe()
+    backend._state = _LoadState(
+        fake_pipe, None, "repo", "base", "cuda", "float16", False,
+        offload_policy = OFFLOAD_GROUP,
+    )
+    result = backend.park()
+    assert result is False
+    assert fake_pipe.to_calls == []  # never even attempted -- the whole point of the gate
+    assert backend._state is not None  # unchanged, still resident
+
+
+def test_park_failure_falls_back_to_a_real_unload():
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+
+    backend = DiffusionBackend()
+    fake_pipe = _RecordingPipe(raise_on_to = True)
+    backend._state = _LoadState(
+        fake_pipe, None, "repo", "base", "cuda", "float16", False,
+        offload_policy = OFFLOAD_NONE,
+    )
+    result = backend.park()
+    assert result is False
+    assert backend._state is None  # real unload happened
+
+
+def test_restore_moves_a_parked_pipeline_back_to_its_device():
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+
+    backend = DiffusionBackend()
+    fake_pipe = _RecordingPipe()
+    backend._state = _LoadState(
+        fake_pipe, None, "repo", "base", "cuda", "float16", False,
+        offload_policy = OFFLOAD_NONE, parked = True,
+    )
+    backend.restore()
+    assert fake_pipe.to_calls == ["cuda"]
+    assert backend._state.parked is False
+
+
+def test_restore_raises_when_nothing_is_parked():
+    backend = DiffusionBackend()
+    with pytest.raises(Exception):
+        backend.restore()
+
+
+def test_resident_footprint_mib_reads_the_recorded_value():
+    backend = DiffusionBackend()
+    backend._state = _LoadState(
+        object(), None, "repo", "base", "cuda", "float16", False, resident_mib = 4096,
+    )
+    assert backend.resident_footprint_mib() == 4096
+
+
+def test_resident_footprint_mib_is_none_when_unrecorded():
+    backend = DiffusionBackend()
+    backend._state = _LoadState(object(), None, "repo", "base", "cuda", "float16", False)
+    assert backend.resident_footprint_mib() is None
+
+
 def test_prefetch_aborts_when_cancelled(tmp_path):
     # A prefetch interrupted by unload raises instead of pulling the whole base, so the load can be preempted.
     backend = DiffusionBackend()

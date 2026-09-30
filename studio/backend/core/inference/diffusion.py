@@ -819,6 +819,10 @@ class _LoadState:
     # Stored rather than rebuilt so generate()'s activation re-check budgets with the SAME
     # distilled / edit multipliers the load did, and the two can never drift apart.
     variant_hint: str = ""
+    # New fields for park()/restore() (Unified Memory core). Defaulted so every existing
+    # construction (including every test fixture already in this file) keeps working unchanged.
+    parked: bool = False
+    resident_mib: Optional[int] = None
 
 
 @dataclass
@@ -4385,6 +4389,7 @@ class DiffusionBackend:
                         offload_policy = effective_policy,
                         vae_tiling = effective_tiling,
                         memory_mode = plan.requested_mode,
+                        resident_mib = plan.estimates.get("resident_required_mib"),
                         speed_mode = effective_speed,
                         speed_optims = tuple(k for k, v in speed_applied.items() if v),
                         backend_flags_before = backend_flags_before,
@@ -5994,6 +5999,55 @@ class DiffusionBackend:
                     # sticky CUDA fault, and an un-drained fence would refuse every later generation for the life of the process.
                     self._teardown_waiters -= 1
         return self.status()
+
+    def park(self) -> bool:
+        """Move a fully-resident (OFFLOAD_NONE) pipeline's modules to CPU and clear the CUDA
+        cache, WITHOUT dropping self._state -- unlike unload(), the pipeline object survives for
+        a fast restore(). Returns False (does nothing) if the loaded pipeline isn't at
+        OFFLOAD_NONE, or if the move itself fails (falls back to a real unload() in that case)."""
+        with self._lock:
+            state = self._state
+            if state is None or state.offload_policy != OFFLOAD_NONE:
+                return False
+            self._cancel_event.set()
+            if self._active_generate_cancel is not None:
+                self._active_generate_cancel.set()
+            self._teardown_waiters += 1
+            self._load_token += 1
+            self._loading = None
+        with self._generate_lock:
+            with self._lock:
+                try:
+                    state = self._state
+                    if state is None:
+                        return False
+                    try:
+                        state.pipe.to("cpu")
+                    except Exception:
+                        logger.exception(
+                            "diffusion.park: .to('cpu') failed, falling back to unload"
+                        )
+                        self._unload_locked()
+                        return False
+                    clear_gpu_cache()
+                    self._state = replace(state, parked = True)
+                    return True
+                finally:
+                    self._teardown_waiters -= 1
+
+    def restore(self) -> None:
+        """Move a parked pipeline back to its recorded device. Raises if nothing is parked, or
+        if the move fails (e.g. CUDA OOM because something else grew VRAM usage while parked)."""
+        with self._lock:
+            state = self._state
+            if state is None or not state.parked:
+                raise RuntimeError("diffusion.restore: nothing is parked")
+            state.pipe.to(state.device)
+            self._state = replace(state, parked = False)
+
+    def resident_footprint_mib(self) -> Optional[int]:
+        state = self._state
+        return state.resident_mib if state is not None else None
 
     def _unload_locked(self) -> None:
         state = self._state
