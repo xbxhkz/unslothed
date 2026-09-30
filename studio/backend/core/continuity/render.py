@@ -17,7 +17,7 @@ is generous enough (1500) that the approximation's error does not matter.
 
 from __future__ import annotations
 
-from core.continuity.schemas import ContinuityError
+from core.continuity.schemas import ContinuityError, TaskQueue
 
 _TARGET_TOKENS = 800
 _HARD_CAP_TOKENS = 1500
@@ -25,6 +25,18 @@ _HARD_CAP_TOKENS = 1500
 
 def _approx_tokens(text: str) -> int:
     return len(text) // 4
+
+
+def _completion_percent(queue: TaskQueue) -> int:
+    """Derived from the live task queue, never read from ProjectState's own
+    completion_percent field -- nothing in this package ever updates that
+    field after init, so a stored copy can only go stale the moment the
+    first task completes. Same "no second source of truth" principle
+    already applied to "ready" status (Task 3)."""
+    if not queue.tasks:
+        return 0
+    completed = sum(1 for t in queue.tasks if t.status == "complete")
+    return round(100 * completed / len(queue.tasks))
 
 
 def render_context_summary(project_dir: str) -> str:
@@ -55,7 +67,7 @@ def render_context_summary(project_dir: str) -> str:
             f"# {state.project} -- {state.status}",
             f"Phase: {state.current_phase}",
             f"Current task: {state.current_task or '(none)'}",
-            f"Completion: {state.completion_percent}%",
+            f"Completion: {_completion_percent(queue)}%",
             "",
             "## Next action",
             state.next_action or "(not recorded)",
@@ -97,7 +109,7 @@ def render_project_state_md(project_dir: str) -> str:
             f"**Project:** {state.project}",
             f"**Status:** {state.status}",
             f"**Phase:** {state.current_phase}",
-            f"**Completion:** {state.completion_percent}%",
+            f"**Completion:** {_completion_percent(queue)}%",
             f"**Next action:** {state.next_action or '(not recorded)'}",
             "",
             "## Modified files",

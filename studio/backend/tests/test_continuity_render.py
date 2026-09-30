@@ -66,3 +66,28 @@ def test_render_project_state_md_lists_tasks(tmp_path):
                                   acceptance_criteria = ["ok"]))
     md = render_project_state_md(str(tmp_path))
     assert "the first task" in md
+
+
+def test_completion_percent_is_derived_from_the_live_queue_not_the_stale_stored_field(tmp_path):
+    """ProjectState.completion_percent is never updated after init by anything
+    in this package -- a render that trusted it would show 0% forever, no
+    matter how many tasks actually completed. completion_percent = 10 here is
+    a decoy: if the render ever regresses to reading it directly, this test
+    catches it via the wrong percentage rather than a coincidentally-matching
+    stale value."""
+    from core.continuity import set_task_status
+
+    write_state(str(tmp_path), _state(completion_percent = 10))
+    add_task(str(tmp_path), Task(id = "t1", title = "one", status = "pending",
+                                  acceptance_criteria = ["ok"]))
+    add_task(str(tmp_path), Task(id = "t2", title = "two", status = "pending",
+                                  acceptance_criteria = ["ok"]))
+    set_task_status(str(tmp_path), "t1", "in_progress")
+    set_task_status(str(tmp_path), "t1", "complete")
+
+    summary = render_context_summary(str(tmp_path))
+    assert "Completion: 50%" in summary
+    assert "Completion: 10%" not in summary
+
+    md = render_project_state_md(str(tmp_path))
+    assert "**Completion:** 50%" in md
