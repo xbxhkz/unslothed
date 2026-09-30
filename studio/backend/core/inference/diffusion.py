@@ -71,6 +71,7 @@ from .diffusion_ideogram4 import ideogram4_repo_is_fp8, load_ideogram4_pipeline
 from .diffusion_hidream import HIDREAM_FAMILY_NAME, hidream_te4_kwargs
 from .diffusion_krea2 import KREA2_FAMILY_NAME, load_krea2_pipeline
 from .diffusion_memory import (
+    MEMORY_MODE_AUTO,
     MEMORY_MODE_BALANCED,
     MEMORY_MODE_LOW_VRAM,
     OFFLOAD_NONE,
@@ -1838,6 +1839,32 @@ class DiffusionBackend:
 
     # ── Background load + progress ─────────────────────────────────────────
 
+    def _matches_parked_identity(
+        self, *, repo_id, gguf_filename, base_repo, model_kind, transformer_quant,
+        text_encoder_quant, cpu_offload, memory_mode, gpu_ordinal, loras,
+    ) -> bool:
+        """Conservative by construction: any field that doesn't match, or can't be compared,
+        means "not the same model" -- restore only happens on a confirmed exact match. Serving
+        the wrong model's weights is the worst failure mode this whole piece could introduce."""
+        state = self._state
+        if state is None or not state.parked:
+            return False
+        if (
+            state.repo_id != repo_id
+            or state.gguf_filename != gguf_filename
+            or state.base_repo != base_repo
+            or state.kind != model_kind
+            or state.transformer_quant != transformer_quant
+            or state.text_encoder_quant != text_encoder_quant
+            or state.cpu_offload != cpu_offload
+            or state.memory_mode != memory_mode
+            or state.gpu_ordinal != gpu_ordinal
+        ):
+            return False
+        active_loras = _active_lora_pairs(state.pipe)
+        requested_loras = loras or []
+        return list(active_loras) == list(requested_loras)
+
     def begin_load(
         self,
         repo_id: str,
@@ -1897,6 +1924,43 @@ class DiffusionBackend:
             text_encoder_quant = text_encoder_quant,
             gpu_ordinal = gpu_ordinal,
         )
+
+        from core.inference import gpu_arbiter, memory_residency
+
+        if memory_residency.is_parked(gpu_arbiter.DIFFUSION):
+            # Resolved/normalized the same way _run_load resolves them before committing to
+            # _LoadState, not the raw request args: state.base_repo, state.kind, and
+            # state.memory_mode all store the RESOLVED value (family default when no override,
+            # "gguf"/"single_file"/"pipeline" inferred from the filename, "auto" when unset), never
+            # a bare None. Comparing raw args here would compare "None" against the resolved value
+            # on nearly every ordinary request, spuriously treating a genuine match as a mismatch --
+            # always the safe direction (an unnecessary cold reload, never a wrong restore), but it
+            # would defeat the whole point of parking. All three resolvers are pure and network-free.
+            resolved_base_repo = resolve_base_repo(fam, base_repo)
+            resolved_kind = resolve_model_kind(gguf_filename, model_kind)
+            resolved_memory_mode = normalize_memory_mode(memory_mode) or MEMORY_MODE_AUTO
+            if self._matches_parked_identity(
+                repo_id = repo_id, gguf_filename = gguf_filename, base_repo = resolved_base_repo,
+                model_kind = resolved_kind, transformer_quant = transformer_quant,
+                text_encoder_quant = text_encoder_quant, cpu_offload = cpu_offload,
+                memory_mode = resolved_memory_mode, gpu_ordinal = gpu_ordinal, loras = loras,
+            ):
+                try:
+                    memory_residency.restore_owner(gpu_arbiter.DIFFUSION, self.restore)
+                    return self.status()
+                except Exception:
+                    logger.exception("diffusion.begin_load: restore failed, falling back to a cold load")
+                    memory_residency.forget_parked(gpu_arbiter.DIFFUSION)
+                    # restore()'s pipe.to(device) can fail PARTWAY through (e.g. CUDA OOM), leaving
+                    # self._state stale: still parked=True, pointing at a pipe that may be half
+                    # moved between devices. Falling through without dropping it would let the cold
+                    # load's own status() report -- or the load itself briefly race against -- that
+                    # corrupted pipe. unload() only clears Python-side state and the CUDA cache; it
+                    # never touches the pipe's tensors, so it is safe to call on a pipe in any state.
+                    self.unload()
+            else:
+                memory_residency.forget_parked(gpu_arbiter.DIFFUSION)
+                self.unload()
 
         with self._lock:
             # Allow starting over a previously-failed load, but not over a live one.

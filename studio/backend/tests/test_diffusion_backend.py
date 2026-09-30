@@ -27,6 +27,7 @@ from core.inference.diffusion import (
     _resolve_base_repo,
     _resolve_diffusion_compute_dtype,
 )
+import core.inference.gpu_arbiter as arb
 
 # diffusion.py imports these lazily, so pull them in under the real torch before the fake-torch fixtures land.
 import core.inference.diffusion_eager_patches  # noqa: E402,F401
@@ -2481,6 +2482,97 @@ def test_resident_footprint_mib_is_none_when_unrecorded():
     backend = DiffusionBackend()
     backend._state = _LoadState(object(), None, "repo", "base", "cuda", "float16", False)
     assert backend.resident_footprint_mib() is None
+
+
+def test_begin_load_restores_instead_of_cold_loading_on_a_matching_identity(monkeypatch):
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+
+    backend = DiffusionBackend()
+    fake_pipe = _RecordingPipe()
+    backend._state = _LoadState(
+        fake_pipe, None, "unsloth/same-repo", "base", "cuda", "float16", False,
+        offload_policy = OFFLOAD_NONE, parked = True, kind = "gguf",
+        gguf_filename = "model.gguf", transformer_quant = None, text_encoder_quant = None,
+        memory_mode = "auto", gpu_ordinal = None,
+    )
+    monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
+    restored = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.restore_owner",
+        lambda owner, restore: (restore(), restored.append(owner)),
+    )
+    run_load_calls = []
+    monkeypatch.setattr(backend, "_run_load", lambda **kw: run_load_calls.append(kw))
+    monkeypatch.setattr(backend, "validate_load_request", lambda *a, **k: types.SimpleNamespace(base_repo = "base"))
+    monkeypatch.setattr(backend, "assert_precision_available", lambda *a, **k: None)
+    # status() walks state.family.name -- irrelevant to the restore-vs-cold-load decision under
+    # test, and the fixture's family is None (as every other park/restore fixture in this file
+    # uses), so stub it out rather than build an unrelated DiffusionFamily double.
+    monkeypatch.setattr(backend, "status", lambda: {})
+
+    backend.begin_load(
+        "unsloth/same-repo", gguf_filename = "model.gguf", model_kind = "gguf",
+    )
+    assert restored == [arb.DIFFUSION]
+    assert run_load_calls == []  # the cold-load thread must never spawn
+
+
+def test_begin_load_cold_loads_when_the_requested_model_differs_from_whats_parked(monkeypatch):
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+
+    backend = DiffusionBackend()
+    fake_pipe = _RecordingPipe()
+    backend._state = _LoadState(
+        fake_pipe, None, "unsloth/parked-repo", "base", "cuda", "float16", False,
+        offload_policy = OFFLOAD_NONE, parked = True, kind = "gguf",
+    )
+    monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
+    forgotten = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.forget_parked", lambda owner: forgotten.append(owner),
+    )
+    restore_called = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.restore_owner",
+        lambda owner, restore: restore_called.append(owner),
+    )
+    run_load_calls = []
+    monkeypatch.setattr(backend, "_run_load", lambda **kw: run_load_calls.append(kw))
+    monkeypatch.setattr(backend, "validate_load_request", lambda *a, **k: types.SimpleNamespace(base_repo = "base"))
+    monkeypatch.setattr(backend, "assert_precision_available", lambda *a, **k: None)
+
+    backend.begin_load("unsloth/a-totally-different-repo", model_kind = "gguf")
+    assert restore_called == []  # never attempted -- identity mismatch
+    assert len(run_load_calls) == 1  # cold load proceeded
+
+
+def test_begin_load_falls_back_to_cold_load_when_restore_raises(monkeypatch):
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+
+    backend = DiffusionBackend()
+    fake_pipe = _RecordingPipe()
+    backend._state = _LoadState(
+        fake_pipe, None, "unsloth/same-repo", "base", "cuda", "float16", False,
+        offload_policy = OFFLOAD_NONE, parked = True, kind = "gguf",
+    )
+    monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
+
+    def raising_restore(owner, restore):
+        raise RuntimeError("CUDA OOM")
+
+    monkeypatch.setattr("core.inference.memory_residency.restore_owner", raising_restore)
+    forgotten = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.forget_parked", lambda owner: forgotten.append(owner),
+    )
+    run_load_calls = []
+    monkeypatch.setattr(backend, "_run_load", lambda **kw: run_load_calls.append(kw))
+    monkeypatch.setattr(backend, "validate_load_request", lambda *a, **k: types.SimpleNamespace(base_repo = "base"))
+    monkeypatch.setattr(backend, "assert_precision_available", lambda *a, **k: None)
+
+    backend.begin_load("unsloth/same-repo", model_kind = "gguf")
+    assert forgotten == [arb.DIFFUSION]
+    assert len(run_load_calls) == 1  # fell through to cold load, did not raise to the caller
 
 
 def test_prefetch_aborts_when_cancelled(tmp_path):
