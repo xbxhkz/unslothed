@@ -132,3 +132,12 @@ def test_a_continuity_error_exits_nonzero_with_a_readable_message(tmp_path, caps
     assert exit_code != 0
     err = capsys.readouterr().err
     assert "nope" in err
+
+
+def test_validate_against_a_dot_ai_that_is_a_plain_file_prints_a_clean_error(tmp_path, capsys):
+    (tmp_path / ".ai").write_text("not a directory", encoding = "utf-8")
+    cli = _load_cli_module()
+    exit_code = cli.main(["validate", "--project-dir", str(tmp_path)])
+    assert exit_code != 0
+    err = capsys.readouterr().err
+    assert "Traceback" not in err

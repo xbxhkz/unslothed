@@ -37,6 +37,26 @@ def _require(d: dict, key: str, expected_type: type):
     return value
 
 
+def _require_list_of_str(d: dict, key: str) -> list[str]:
+    """list(d.get(key) or []) silently turns a hand-typed string into a list
+    of its individual characters (list("t1") == ['t', '1']), which then reads
+    as plausible-looking but wrong data three calls later -- e.g. depends_on
+    becoming two single-character "dependency ids" that validate() then
+    reports as unknown, rather than the actual problem (a string where a
+    list was required)."""
+    value = d.get(key)
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raise ContinuityError(
+            f"field {key!r} must be a list of strings, got a single string {value!r} "
+            "-- did you mean to wrap it in a list?"
+        )
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ContinuityError(f"field {key!r} must be a list of strings")
+    return value
+
+
 @dataclass
 class ProjectState:
     schema_version: int
@@ -78,14 +98,14 @@ class ProjectState:
             current_task = d.get("current_task"),
             completion_percent = _require(d, "completion_percent", int),
             last_checkpoint = d.get("last_checkpoint"),
-            completed = list(d.get("completed") or []),
-            in_progress = list(d.get("in_progress") or []),
-            remaining = list(d.get("remaining") or []),
+            completed = _require_list_of_str(d, "completed"),
+            in_progress = _require_list_of_str(d, "in_progress"),
+            remaining = _require_list_of_str(d, "remaining"),
             next_action = d.get("next_action") or "",
-            modified_files = list(d.get("modified_files") or []),
+            modified_files = _require_list_of_str(d, "modified_files"),
             tests = dict(d.get("tests") or {}),
-            blocking_issues = list(d.get("blocking_issues") or []),
-            important_decisions = list(d.get("important_decisions") or []),
+            blocking_issues = _require_list_of_str(d, "blocking_issues"),
+            important_decisions = _require_list_of_str(d, "important_decisions"),
         )
 
 
@@ -110,8 +130,8 @@ class Task:
         return Task(
             id = _require(d, "id", str), title = _require(d, "title", str),
             status = _require(d, "status", str),
-            depends_on = list(d.get("depends_on") or []),
-            acceptance_criteria = list(d.get("acceptance_criteria") or []),
+            depends_on = _require_list_of_str(d, "depends_on"),
+            acceptance_criteria = _require_list_of_str(d, "acceptance_criteria"),
             owner = d.get("owner"),
         )
 

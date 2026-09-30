@@ -33,7 +33,12 @@ _STATE_FILENAME = "project_state.json"
 
 
 def _state_path(project_dir: str) -> str:
-    return os.path.join(storage.ai_dir(project_dir), _STATE_FILENAME)
+    # ai_dir_path, not ai_dir: read_json already handles a missing file
+    # gracefully, and write_json_atomic creates its own parent directory --
+    # neither load_state nor write_state needs .ai/'s create-if-missing side
+    # effect, and load_state must not have one (validate calls it and must
+    # stay read-only even when .ai does not exist as a directory yet).
+    return os.path.join(storage.ai_dir_path(project_dir), _STATE_FILENAME)
 
 
 def load_state(project_dir: str) -> ProjectState | None:
@@ -90,7 +95,7 @@ _VALID_STATUSES = frozenset(_TRANSITIONS)
 
 
 def _tasks_path(project_dir: str) -> str:
-    return os.path.join(storage.ai_dir(project_dir), _TASKS_FILENAME)
+    return os.path.join(storage.ai_dir_path(project_dir), _TASKS_FILENAME)
 
 
 def load_tasks(project_dir: str) -> TaskQueue:
@@ -157,7 +162,10 @@ _ERRORS_FILENAME = "errors.jsonl"
 
 
 def _errors_path(project_dir: str) -> str:
-    return os.path.join(storage.ai_dir(project_dir), "logs", _ERRORS_FILENAME)
+    # ai_dir_path: prior_failures is a read and must not create directories,
+    # or raise, just to discover there is nothing to read yet.
+    # _append_error_line (the write side) creates its own parent directory.
+    return os.path.join(storage.ai_dir_path(project_dir), "logs", _ERRORS_FILENAME)
 
 
 def _append_error_line(project_dir: str, entry: ErrorEntry) -> None:
@@ -233,7 +241,16 @@ def prior_failures(project_dir: str, symptom_query: str) -> list[ErrorEntry]:
             line = line.strip()
             if not line:
                 continue
-            entry = ErrorEntry.from_dict(_json.loads(line))
+            try:
+                entry = ErrorEntry.from_dict(_json.loads(line))
+            except (_json.JSONDecodeError, ContinuityError, TypeError, KeyError):
+                # One torn line (a partial write from a killed process, a
+                # hand edit) must not make every later entry unreachable --
+                # errors.jsonl is append-only text, not atomically written
+                # like the JSON files, so a torn line is a real possibility
+                # this function has to tolerate, not just json.dump's own
+                # (atomic) files.
+                continue
             if query in entry.symptom.lower():
                 hits.append(entry)
     return hits
@@ -245,6 +262,15 @@ import uuid as _uuid
 _DEFAULT_CHECKPOINT_RETAIN = 20
 
 
+def _checkpoint_seq(filename: str) -> int | None:
+    """The sequence number a checkpoint filename starts with, or None if it
+    doesn't look like one -- a stray file in checkpoints/ (not written by
+    this function) must be ignored, not crash every future checkpoint()
+    call on int() of a non-numeric prefix."""
+    prefix = filename.split("-", 1)[0]
+    return int(prefix) if prefix.isdigit() else None
+
+
 def checkpoint(project_dir: str, note: str, *, retain: int = _DEFAULT_CHECKPOINT_RETAIN) -> str:
     """Snapshot project_state.json plus a note. Returns the written filename.
     Pruned to the RETAIN most recently written checkpoints -- ordered by a
@@ -253,10 +279,10 @@ def checkpoint(project_dir: str, note: str, *, retain: int = _DEFAULT_CHECKPOINT
     state = load_state(project_dir)
     checkpoints_dir = os.path.join(storage.ai_dir(project_dir), "checkpoints")
     existing = sorted(
-        (p for p in os.listdir(checkpoints_dir) if p.endswith(".json")),
-        key = lambda p: int(p.split("-", 1)[0]),
+        (p for p in os.listdir(checkpoints_dir) if p.endswith(".json") and _checkpoint_seq(p) is not None),
+        key = _checkpoint_seq,
     )
-    next_seq = (int(existing[-1].split("-", 1)[0]) + 1) if existing else 0
+    next_seq = (_checkpoint_seq(existing[-1]) + 1) if existing else 0
     filename = f"{next_seq:08d}-{_uuid.uuid4().hex[:8]}.json"
     payload = {
         "seq": next_seq,
@@ -266,9 +292,15 @@ def checkpoint(project_dir: str, note: str, *, retain: int = _DEFAULT_CHECKPOINT
     }
     storage.write_json_atomic(os.path.join(checkpoints_dir, filename), payload)
 
+    if state is not None:
+        # Guarded: a checkpoint taken before init (no project_state.json yet)
+        # still succeeds with state: null in its own payload above -- it just
+        # cannot update a state that doesn't exist yet.
+        update_state(project_dir, last_checkpoint = filename)
+
     all_now = sorted(
-        (p for p in os.listdir(checkpoints_dir) if p.endswith(".json")),
-        key = lambda p: int(p.split("-", 1)[0]),
+        (p for p in os.listdir(checkpoints_dir) if p.endswith(".json") and _checkpoint_seq(p) is not None),
+        key = _checkpoint_seq,
     )
     if len(all_now) > retain:
         for stale in all_now[: len(all_now) - retain]:
@@ -319,6 +351,16 @@ def validate(project_dir: str) -> list[str]:
     strings; there is no downstream consumer yet that needs structure richer
     than 'read this to a human'."""
     problems: list[str] = []
+
+    ai_path = storage.ai_dir_path(project_dir)
+    if os.path.exists(ai_path) and not os.path.isdir(ai_path):
+        # A corrupted tree (.ai exists as a plain file, not a directory) must
+        # be a reported finding, not silently read as "nothing here yet" --
+        # load_state/load_tasks below use ai_dir_path precisely so they do
+        # not crash on this, but that means they also can't tell "corrupted"
+        # apart from "not initialized" on their own; this is validate's job.
+        problems.append(f"{ai_path} exists and is not a directory")
+        return problems
 
     try:
         state = load_state(project_dir)

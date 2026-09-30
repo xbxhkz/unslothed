@@ -47,6 +47,19 @@ def test_multiple_entries_all_queryable(tmp_path):
     assert len(prior_failures(str(tmp_path), "inert")) == 1
 
 
+def test_a_torn_line_does_not_make_later_entries_unreachable(tmp_path):
+    """errors.jsonl is append-only text, not atomically written like the JSON
+    files -- a partial write from a killed process (or a hand edit) is a real
+    possibility, and one bad line must not sink every entry after it."""
+    record_error(str(tmp_path), what_tried = "a", why_failed = "b", symptom = "good entry one")
+    errors_path = continuity_module._errors_path(str(tmp_path))
+    with open(errors_path, "a", encoding = "utf-8") as f:
+        f.write('{"ts": "2026-01-01", "project": "x", "what_tried": "torn\n')
+    record_error(str(tmp_path), what_tried = "c", why_failed = "d", symptom = "good entry two")
+    hits = prior_failures(str(tmp_path), "good entry")
+    assert {h.symptom for h in hits} == {"good entry one", "good entry two"}
+
+
 def test_record_error_returns_true_when_the_primary_write_lands(tmp_path):
     assert record_error(str(tmp_path), what_tried = "a", why_failed = "b", symptom = "c") is True
 
