@@ -95,6 +95,9 @@ class _FakeBackend(video_module.VideoBackend):
                 family = detect_video_family("Lightricks/LTX-2"),
                 h3_task = None,
                 engine = "diffusers",
+                # begin_generate refuses a parked state (Unified Memory core), so the double
+                # carries the field the real _VideoLoadState always has.
+                parked = False,
             )
             if value
             else None
