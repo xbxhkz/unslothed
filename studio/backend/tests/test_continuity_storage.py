@@ -77,6 +77,35 @@ def test_write_json_atomic_lets_keyboard_interrupt_propagate(tmp_path, monkeypat
         storage.write_json_atomic(target, {"a": 1})
 
 
+def test_write_json_atomic_leaves_the_original_untouched_if_the_write_is_killed(tmp_path, monkeypatch):
+    """Spec section 8's own required negative control (the first one listed):
+    a write that dies partway through must never corrupt or truncate the file
+    that was already there. This was demonstrated once, live, during Task 1's
+    implementation, but never captured as a permanent test -- nothing in the
+    committed suite would have caught a future regression (e.g. someone
+    "simplifying" write_json_atomic to write in place instead of via a temp
+    file + os.replace). Reuses the same json.dump-raises technique as
+    test_write_json_atomic_wraps_write_failure_in_continuity_error above, but
+    against a target that already has real content before the failing write
+    is attempted -- that other test only covers writing into an empty path."""
+    target = str(tmp_path / "state.json")
+    storage.write_json_atomic(target, {"already": "here", "untouched": True})
+    with open(target, encoding = "utf-8") as f:
+        original_bytes = f.read()
+
+    def raise_on_dump(*args, **kwargs):
+        raise OSError("disk full, mid-write")
+
+    monkeypatch.setattr(json, "dump", raise_on_dump)
+    with pytest.raises(ContinuityError):
+        storage.write_json_atomic(target, {"new": "data", "that": "never lands"})
+
+    with open(target, encoding = "utf-8") as f:
+        after_bytes = f.read()
+    assert after_bytes == original_bytes, "a killed write corrupted the pre-existing file"
+    assert json.loads(after_bytes) == {"already": "here", "untouched": True}
+
+
 def test_read_json_non_dict_json_raises(tmp_path):
     """A bare scalar is valid JSON but not a valid continuity file -- must
     raise ContinuityError, not let a caller's from_dict crash on it three
