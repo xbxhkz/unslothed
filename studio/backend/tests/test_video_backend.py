@@ -4869,6 +4869,140 @@ def test_restore_raises_when_nothing_is_parked():
         backend.restore()
 
 
+# A parked pipeline is NOT loaded (whole-branch review C1, mirrors the image backend): its
+# tensors are in system RAM while state.device still names the card. Reporting it loaded kept
+# the UI from ever calling begin_load() -- the only path that restores it -- and let a generate
+# run against it. VideoBackend has no is_loaded property; status()["loaded"] is its equivalent.
+
+
+def _parked_video_state(pipe, **overrides):
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+    from core.inference.video import _VideoLoadState
+
+    fields = dict(
+        pipe = pipe, family = None, repo_id = "unsloth/parked-repo", base_repo = "base",
+        device = "cuda", dtype = "float16", kind = "gguf",
+        offload_policy = OFFLOAD_NONE, parked = True,
+    )
+    fields.update(overrides)
+    return _VideoLoadState(**fields)
+
+
+def test_generate_refuses_a_parked_pipeline_as_not_loaded(fake_runtime):
+    backend = VideoBackend()
+    pipe = _RecordingPipe()
+    backend._state = _parked_video_state(pipe)
+    with pytest.raises(RuntimeError, match = VIDEO_NOT_LOADED_MSG):
+        backend.generate(prompt = "x")
+    assert backend._active_generate_cancel is None  # refused at the gate, nothing registered
+    assert pipe.to_calls == []
+    assert backend._state.parked is True
+
+
+def test_begin_generate_refuses_a_parked_pipeline_as_not_loaded():
+    backend = VideoBackend()
+    backend._state = _parked_video_state(_RecordingPipe())
+    with pytest.raises(RuntimeError, match = VIDEO_NOT_LOADED_MSG):
+        backend.begin_generate(prompt = "x")
+    assert backend._generate_job_active is False  # no job reserved
+    assert backend._active_generate_cancel is None
+
+
+def test_begin_generate_rechecks_parked_after_its_unlocked_validation(monkeypatch):
+    # begin_generate validates conditioning OUTSIDE the lock, then re-checks the state under it
+    # before reserving the job. A park landing in that window must be caught by the second gate,
+    # not only the first -- otherwise a job would be reserved against a pipe now in RAM.
+    backend = VideoBackend()
+    backend._state = _parked_video_state(_RecordingPipe(), parked = False)
+    monkeypatch.setattr(backend, "_resolve_keyframes", lambda *a, **k: (None, None, 64, 64, None))
+    monkeypatch.setattr(backend, "_resolve_references", lambda *a, **k: None)
+
+    def _park_in_the_window(*a, **k):
+        backend._state = replace(backend._state, parked = True)
+
+    monkeypatch.setattr(backend, "_resolve_flow_shifts", _park_in_the_window)
+    with pytest.raises(RuntimeError, match = VIDEO_NOT_LOADED_MSG):
+        backend.begin_generate(prompt = "x")
+    assert backend._generate_job_active is False
+
+
+def test_status_reports_a_parked_pipeline_as_not_loaded():
+    from core.inference.video_families import detect_video_family
+
+    backend = VideoBackend()
+    family = detect_video_family("Lightricks/LTX-2")
+    backend._state = _parked_video_state(_RecordingPipe(), family = family)
+    status = backend.status()
+    assert status["loaded"] is False
+    assert status["parked"] is True
+    assert status["repo_id"] == "unsloth/parked-repo"  # still describes what is parked
+    # Control: the same state, restored, reads as loaded again -- the field tracks `parked`.
+    backend._state = replace(backend._state, parked = False)
+    status = backend.status()
+    assert status["loaded"] is True
+    assert status["parked"] is False
+    assert VideoBackend().status()["parked"] is False
+
+
+def test_delete_guard_still_refuses_a_parked_video_repo(monkeypatch):
+    # status()["loaded"] is now False while parked, and the delete guard keyed on it alone.
+    from core.inference.video_families import detect_video_family
+    from hub.services.models import deletion
+
+    backend = VideoBackend()
+    family = detect_video_family("Lightricks/LTX-2")
+    backend._state = _parked_video_state(_RecordingPipe(), family = family)
+    monkeypatch.setattr("core.inference.video.get_video_backend", lambda: backend)
+    assert backend.status()["loaded"] is False  # the precondition that made this reachable
+    assert deletion._video_blocks_delete("unsloth/parked-repo") is not None
+    assert deletion._video_blocks_delete("unsloth/something-else") is None
+
+
+def test_restore_waits_for_an_inflight_generation_to_release_generate_lock(monkeypatch):
+    # Defense in depth: generate() already refuses a parked pipe, but restore() must still never
+    # move tensors while something holds _generate_lock (the same barrier park()/unload() take).
+    backend = VideoBackend()
+    pipe = _RecordingPipe()
+    backend._state = _parked_video_state(pipe)
+    monkeypatch.setattr(backend, "_state_device_target", lambda state: None)
+
+    holding = threading.Event()
+    release = threading.Event()
+
+    def _generation():
+        with backend._generate_lock:
+            holding.set()
+            release.wait(5)
+
+    gen = threading.Thread(target = _generation)
+    gen.start()
+    assert holding.wait(5)
+
+    restored = threading.Event()
+    errors = []
+
+    def _restore():
+        try:
+            backend.restore()
+        except Exception as exc:  # noqa: BLE001 -- surfaced by the assert below
+            errors.append(exc)
+        restored.set()
+
+    rt = threading.Thread(target = _restore)
+    rt.start()
+    assert not restored.wait(0.5)
+    assert pipe.to_calls == []
+    assert backend._state.parked is True
+
+    release.set()
+    gen.join(5)
+    rt.join(5)
+    assert restored.is_set()
+    assert errors == []
+    assert pipe.to_calls == ["cuda"]
+    assert backend._state.parked is False
+
+
 def test_resident_footprint_mib_reads_the_recorded_value():
     from core.inference.video import _VideoLoadState
 

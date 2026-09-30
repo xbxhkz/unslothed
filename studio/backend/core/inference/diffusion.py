@@ -1195,7 +1195,11 @@ class DiffusionBackend:
 
     @property
     def is_loaded(self) -> bool:
-        return self._state is not None
+        # A parked pipeline sits in system RAM, not on the device: it cannot generate until a
+        # begin_load() restores it, so it must not read as loaded to any caller deciding whether
+        # to load or generate.
+        state = self._state
+        return state is not None and not state.parked
 
     def _pick_device_and_dtype(self, ordinal: Optional[int] = None) -> tuple[str, Any]:
         """(device, dtype) for the current host. Thin wrapper over the device
@@ -5608,7 +5612,10 @@ class DiffusionBackend:
                 if self._teardown_waiters:
                     raise RuntimeError(DIFFUSION_CANCELLED_MSG)
                 state = self._state
-                if state is None:
+                # A parked pipe's tensors are in RAM while state.device still names the card, so
+                # a denoise here would run against the wrong device. From the caller's side it is
+                # genuinely not loaded: begin_load() is what restores it.
+                if state is None or state.parked:
                     raise RuntimeError(DIFFUSION_NOT_LOADED_MSG)
                 # Register under _lock so unload()/a load can signal THIS generation.
                 self._active_generate_cancel = cancel
@@ -6177,19 +6184,30 @@ class DiffusionBackend:
     def restore(self) -> None:
         """Move a parked pipeline back to its recorded device. Raises if nothing is parked, or
         if the move fails (e.g. CUDA OOM because something else grew VRAM usage while parked)."""
+        # Fail fast, without queueing behind _generate_lock, when there is nothing to restore.
         with self._lock:
             state = self._state
             if state is None or not state.parked:
                 raise RuntimeError("diffusion.restore: nothing is parked")
-            # Pin THIS thread to the card the weights actually live on before touching them:
-            # begin_load can run on a pooled asyncio.to_thread worker a PREVIOUS pinned load left
-            # pointing at a different card, and state.device is the bare, un-indexed "cuda"
-            # string -- .to(state.device) alone would land on whatever card the calling thread
-            # already defaults to, not necessarily this pipeline's card. Same hazard, same fix
-            # generate() already applies via _state_device_target before touching a resident pipe.
-            self._state_device_target(state)
-            state.pipe.to(state.device)
-            self._state = replace(state, parked = False)
+        # The move itself runs under _generate_lock too, the same barrier park() and unload() take:
+        # generate() already refuses a parked state, so this is defense in depth -- a restore can
+        # never move tensors under a generation that is somehow still in flight. Re-checked after
+        # the barrier, since the state can have been unloaded or restored while this waited.
+        with self._generate_lock:
+            with self._lock:
+                state = self._state
+                if state is None or not state.parked:
+                    raise RuntimeError("diffusion.restore: nothing is parked")
+                # Pin THIS thread to the card the weights actually live on before touching them:
+                # begin_load can run on a pooled asyncio.to_thread worker a PREVIOUS pinned load
+                # left pointing at a different card, and state.device is the bare, un-indexed
+                # "cuda" string -- .to(state.device) alone would land on whatever card the calling
+                # thread already defaults to, not necessarily this pipeline's card. Same hazard,
+                # same fix generate() already applies via _state_device_target before touching a
+                # resident pipe.
+                self._state_device_target(state)
+                state.pipe.to(state.device)
+                self._state = replace(state, parked = False)
 
     def resident_footprint_mib(self) -> Optional[int]:
         state = self._state
@@ -6225,6 +6243,7 @@ class DiffusionBackend:
         if state is None:
             return {
                 "loaded": False,
+                "parked": False,
                 "repo_id": None,
                 "family": None,
                 "base_repo": None,
@@ -6251,7 +6270,11 @@ class DiffusionBackend:
         from hub.utils.gguf import extract_quant_token
 
         return {
-            "loaded": True,
+            # A parked pipeline is in system RAM and cannot generate: reporting it loaded kept the
+            # UI (and media auto-switch) from ever calling begin_load(), the only path that
+            # restores it.
+            "loaded": not state.parked,
+            "parked": state.parked,
             "repo_id": state.repo_id,
             "family": state.family.name,
             "base_repo": state.base_repo,

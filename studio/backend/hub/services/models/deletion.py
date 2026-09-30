@@ -681,7 +681,12 @@ def _diffusion_blocks_delete(repo_id: str) -> Optional[str]:
         logger.debug(f"Diffusion engine unavailable during delete guard for {repo_id}: {e}")
         return None
     status = engine.status()
-    if status.get("loaded") and status.get("repo_id"):
+    # A PARKED pipeline reports loaded=False (it cannot generate until restored), but it is still
+    # this repo's weights held in RAM for a restore that skips the disk entirely. Deleting its files
+    # (then re-downloading a newer revision under the same id) would let that restore serve the OLD
+    # weights for a repo whose cache now says otherwise, so a parked hold refuses exactly like a
+    # resident one did before parking reported itself unloaded.
+    if (status.get("loaded") or status.get("parked")) and status.get("repo_id"):
         if _loaded_id_matches_repo(str(status["repo_id"]), repo_id):
             return "Unload the model before deleting"
     # sd.cpp re-reads companion VAE / text-encoder files every generation and status().repo_id covers only the main GGUF, so refuse the companions too.
@@ -708,7 +713,8 @@ def _video_blocks_delete(repo_id: str) -> Optional[str]:
         logger.debug(f"Video backend unavailable during delete guard for {repo_id}: {e}")
         return None
     status = backend.status()
-    if status.get("loaded"):
+    # Parked counts as held, for the same reason as the Images guard above.
+    if status.get("loaded") or status.get("parked"):
         # repo_id names the checkpoint; for a GGUF / single-file load the companion base supplies the VAE and text encoders, so refuse it too.
         for key in ("repo_id", "base_repo"):
             held = status.get(key)

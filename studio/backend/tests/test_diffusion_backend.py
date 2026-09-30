@@ -2474,6 +2474,128 @@ def test_restore_raises_when_nothing_is_parked():
         backend.restore()
 
 
+# A parked pipeline is NOT loaded (whole-branch review C1): its tensors are in system RAM while
+# state.device still names the card. Reporting it loaded kept the UI from ever calling
+# begin_load() -- the only path that restores it -- and let a generate run against it.
+
+
+def _parked_state(pipe, **overrides):
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+
+    fields = dict(offload_policy = OFFLOAD_NONE, parked = True, kind = "gguf")
+    fields.update(overrides)
+    return _LoadState(pipe, None, "unsloth/parked-repo", "base", "cuda", "float16", False, **fields)
+
+
+def test_generate_refuses_a_parked_pipeline_as_not_loaded(fake_runtime):
+    from core.inference.diffusion import DIFFUSION_NOT_LOADED_MSG
+
+    backend = DiffusionBackend()
+    pipe = _RecordingPipe()
+    backend._state = _parked_state(pipe)
+    with pytest.raises(RuntimeError, match = re.escape(DIFFUSION_NOT_LOADED_MSG)):
+        backend.generate(prompt = "x")
+    # Refused at the gate: nothing registered as an in-flight generation, nothing moved.
+    assert backend._active_generate_cancel is None
+    assert backend._gen is None
+    assert pipe.to_calls == []
+    assert backend._state.parked is True
+
+
+def test_status_reports_a_parked_pipeline_as_not_loaded():
+    import dataclasses
+
+    backend = DiffusionBackend()
+    family = detect_family("unsloth/Z-Image-Turbo-GGUF")
+    backend._state = dataclasses.replace(_parked_state(_RecordingPipe()), family = family)
+    status = backend.status()
+    assert status["loaded"] is False
+    assert status["parked"] is True
+    assert status["repo_id"] == "unsloth/parked-repo"  # still describes what is parked
+    # Control: the same state, restored, reads as loaded again -- the field tracks `parked`,
+    # it is not simply hard-coded False now.
+    backend._state = dataclasses.replace(backend._state, parked = False)
+    status = backend.status()
+    assert status["loaded"] is True
+    assert status["parked"] is False
+    # The empty-backend shape carries the key too, so callers never KeyError on it.
+    assert DiffusionBackend().status()["parked"] is False
+
+
+def test_delete_guard_still_refuses_a_parked_images_repo(monkeypatch):
+    # status()["loaded"] is now False while parked, and the delete guard keyed on it alone: the
+    # parked repo's files would have become deletable out from under a pipeline waiting to restore.
+    import dataclasses
+
+    from hub.services.models import deletion
+
+    backend = DiffusionBackend()
+    family = detect_family("unsloth/Z-Image-Turbo-GGUF")
+    backend._state = dataclasses.replace(_parked_state(_RecordingPipe()), family = family)
+    monkeypatch.setattr(
+        "core.inference.diffusion_engine_router.get_active_diffusion_engine", lambda: backend,
+    )
+    assert backend.status()["loaded"] is False  # the precondition that made this reachable
+    assert deletion._diffusion_blocks_delete("unsloth/parked-repo") is not None
+    assert deletion._diffusion_blocks_delete("unsloth/something-else") is None
+
+
+def test_is_loaded_is_false_for_a_parked_pipeline():
+    import dataclasses
+
+    backend = DiffusionBackend()
+    backend._state = _parked_state(_RecordingPipe())
+    assert backend.is_loaded is False
+    backend._state = dataclasses.replace(backend._state, parked = False)
+    assert backend.is_loaded is True
+
+
+def test_restore_waits_for_an_inflight_generation_to_release_generate_lock(monkeypatch):
+    # Defense in depth: generate() already refuses a parked pipe, but restore() must still never
+    # move tensors while something holds _generate_lock (the same barrier park()/unload() take).
+    backend = DiffusionBackend()
+    pipe = _RecordingPipe()
+    backend._state = _parked_state(pipe)
+    monkeypatch.setattr(backend, "_state_device_target", lambda state: None)
+
+    holding = threading.Event()
+    release = threading.Event()
+
+    def _generation():
+        with backend._generate_lock:
+            holding.set()
+            release.wait(5)
+
+    gen = threading.Thread(target = _generation)
+    gen.start()
+    assert holding.wait(5)
+
+    restored = threading.Event()
+    errors = []
+
+    def _restore():
+        try:
+            backend.restore()
+        except Exception as exc:  # noqa: BLE001 -- surfaced by the assert below
+            errors.append(exc)
+        restored.set()
+
+    rt = threading.Thread(target = _restore)
+    rt.start()
+    # Blocked behind the "generation": no move, still parked.
+    assert not restored.wait(0.5)
+    assert pipe.to_calls == []
+    assert backend._state.parked is True
+
+    release.set()
+    gen.join(5)
+    rt.join(5)
+    assert restored.is_set()
+    assert errors == []
+    assert pipe.to_calls == ["cuda"]
+    assert backend._state.parked is False
+
+
 def test_resident_footprint_mib_reads_the_recorded_value():
     backend = DiffusionBackend()
     backend._state = _LoadState(

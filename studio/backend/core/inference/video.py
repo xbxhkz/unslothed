@@ -5075,9 +5075,11 @@ class VideoBackend:
         sentinels the route maps to 409.
         """
         cancel = threading.Event()
-        # Snapshot load state before decoding outside the backend lock.
+        # Snapshot load state before decoding outside the backend lock. A parked pipeline is in
+        # system RAM and cannot generate until begin_load() restores it, so it is "not loaded" here
+        # exactly as status() reports it.
         with self._lock:
-            if self._state is None:
+            if self._state is None or self._state.parked:
                 raise RuntimeError(VIDEO_NOT_LOADED_MSG)
             if self._generate_job_active:
                 raise RuntimeError(VIDEO_GENERATION_BUSY_MSG)
@@ -5101,7 +5103,7 @@ class VideoBackend:
         )
         self._resolve_flow_shifts(family, engine, flow_shift, audio_flow_shift)
         with self._lock:
-            if self._state is None:
+            if self._state is None or self._state.parked:
                 raise RuntimeError(VIDEO_NOT_LOADED_MSG)
             if self._generate_job_active:
                 raise RuntimeError(VIDEO_GENERATION_BUSY_MSG)
@@ -5288,7 +5290,9 @@ class VideoBackend:
                 if self._teardown_waiters:
                     raise RuntimeError(VIDEO_CANCELLED_MSG)
                 state = self._state
-                if state is None:
+                # A parked pipe's tensors are in RAM while state.device still names the card:
+                # denoising it here would run on the wrong device. begin_load() restores it.
+                if state is None or state.parked:
                     raise RuntimeError(VIDEO_NOT_LOADED_MSG)
                 self._active_generate_cancel = cancel
             # Bound below, once the request is resolved. None means the failure beat the
@@ -6172,19 +6176,30 @@ class VideoBackend:
     def restore(self) -> None:
         """Move a parked pipeline back to its recorded device. Raises if nothing is parked, or
         if the move fails (e.g. CUDA OOM because something else grew VRAM usage while parked)."""
+        # Fail fast, without queueing behind _generate_lock, when there is nothing to restore.
         with self._lock:
             state = self._state
             if state is None or not state.parked:
                 raise RuntimeError("video.restore: nothing is parked")
-            # Pin THIS thread to the card the weights actually live on before touching them:
-            # begin_load can run on a pooled asyncio.to_thread worker a PREVIOUS pinned load left
-            # pointing at a different card, and state.device is the bare, un-indexed "cuda"
-            # string -- .to(state.device) alone would land on whatever card the calling thread
-            # already defaults to, not necessarily this pipeline's card. Same hazard, same fix
-            # generate() already applies via _state_device_target before touching a resident pipe.
-            self._state_device_target(state)
-            state.pipe.to(state.device)
-            self._state = replace(state, parked = False)
+        # The move itself runs under _generate_lock too, the same barrier park() and unload() take:
+        # generate() already refuses a parked state, so this is defense in depth -- a restore can
+        # never move tensors under a generation that is somehow still in flight. Re-checked after
+        # the barrier, since the state can have been unloaded or restored while this waited.
+        with self._generate_lock:
+            with self._lock:
+                state = self._state
+                if state is None or not state.parked:
+                    raise RuntimeError("video.restore: nothing is parked")
+                # Pin THIS thread to the card the weights actually live on before touching them:
+                # begin_load can run on a pooled asyncio.to_thread worker a PREVIOUS pinned load
+                # left pointing at a different card, and state.device is the bare, un-indexed
+                # "cuda" string -- .to(state.device) alone would land on whatever card the calling
+                # thread already defaults to, not necessarily this pipeline's card. Same hazard,
+                # same fix generate() already applies via _state_device_target before touching a
+                # resident pipe.
+                self._state_device_target(state)
+                state.pipe.to(state.device)
+                self._state = replace(state, parked = False)
 
     def resident_footprint_mib(self) -> Optional[int]:
         state = self._state
@@ -6195,6 +6210,7 @@ class VideoBackend:
         if state is None:
             return {
                 "loaded": False,
+                "parked": False,
                 "repo_id": None,
                 "family": None,
                 "base_repo": None,
@@ -6230,7 +6246,11 @@ class VideoBackend:
             fallback = (fam.default_steps, fam.default_guidance),
         )
         return {
-            "loaded": True,
+            # A parked pipeline is in system RAM and cannot generate: reporting it loaded kept the
+            # UI (and media auto-switch) from ever calling begin_load(), the only path that
+            # restores it.
+            "loaded": not state.parked,
+            "parked": state.parked,
             "repo_id": state.repo_id,
             "family": fam.name,
             "base_repo": state.base_repo,
