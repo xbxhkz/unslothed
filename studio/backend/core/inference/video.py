@@ -37,7 +37,7 @@ import tempfile
 import threading
 import time
 import types
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Optional
 
@@ -70,6 +70,7 @@ from .diffusion_device import (
     resolve_selected_cuda_ordinal,
 )
 from .diffusion_memory import (
+    OFFLOAD_NONE,
     apply_memory_plan,
     estimate_gguf_resident_mib,
     estimate_safetensors_dense_mib,
@@ -537,6 +538,10 @@ class _VideoLoadState:
     # preflight has to know, because that turns its floor from a max into a sum.
     h3_denoiser_pinned: bool = False
     resolved: Optional[dict] = None
+    # New fields for park()/restore() (Unified Memory core). Defaulted so every existing
+    # construction (including every test fixture already in this file) keeps working unchanged.
+    parked: bool = False
+    resident_mib: Optional[int] = None
 
 
 @dataclass
@@ -4052,6 +4057,7 @@ class VideoBackend:
                     offload_policy = offload_policy,
                     vae_tiling = vae_tiling,
                     memory_mode = plan.requested_mode,
+                    resident_mib = plan.estimates.get("resident_required_mib"),
                     speed_mode = effective_speed,
                     # Already filtered to the engaged optimisations (True names only).
                     speed_optims = speed_optims,
@@ -5991,6 +5997,55 @@ class VideoBackend:
                     self._teardown_waiters -= 1
         logger.info("video.unloaded")
         return self.status()
+
+    def park(self) -> bool:
+        """Move a fully-resident (OFFLOAD_NONE) pipeline's modules to CPU and clear the CUDA
+        cache, WITHOUT dropping self._state -- unlike unload(), the pipeline object survives for
+        a fast restore(). Returns False (does nothing) if the loaded pipeline isn't at
+        OFFLOAD_NONE, or if the move itself fails (falls back to a real teardown in that case)."""
+        with self._lock:
+            state = self._state
+            if state is None or state.offload_policy != OFFLOAD_NONE:
+                return False
+            self._load_token += 1
+            self._cancel_event.set()
+            self._loading = None
+            if self._active_generate_cancel is not None:
+                self._active_generate_cancel.set()
+            self._teardown_waiters += 1
+        with self._generate_lock:
+            with self._lock:
+                try:
+                    state = self._state
+                    if state is None:
+                        return False
+                    try:
+                        state.pipe.to("cpu")
+                    except Exception:
+                        logger.exception(
+                            "video.park: .to('cpu') failed, falling back to unload"
+                        )
+                        self._teardown_state_locked()
+                        return False
+                    clear_gpu_cache()
+                    self._state = replace(state, parked = True)
+                    return True
+                finally:
+                    self._teardown_waiters -= 1
+
+    def restore(self) -> None:
+        """Move a parked pipeline back to its recorded device. Raises if nothing is parked, or
+        if the move fails (e.g. CUDA OOM because something else grew VRAM usage while parked)."""
+        with self._lock:
+            state = self._state
+            if state is None or not state.parked:
+                raise RuntimeError("video.restore: nothing is parked")
+            state.pipe.to(state.device)
+            self._state = replace(state, parked = False)
+
+    def resident_footprint_mib(self) -> Optional[int]:
+        state = self._state
+        return state.resident_mib if state is not None else None
 
     def status(self) -> dict[str, Any]:
         state = self._state
