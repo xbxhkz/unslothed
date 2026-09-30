@@ -2665,6 +2665,49 @@ def test_begin_load_cold_loads_when_the_repo_is_a_local_path_even_if_unchanged(m
     assert len(run_load_calls) == 1  # cold load proceeded, re-reading the file from disk
 
 
+def test_begin_load_cold_loads_when_the_selected_lora_is_local_even_if_unchanged(monkeypatch):
+    # Mirrors the local-repo test above, but for a requested LoRA: a local adapter file can be
+    # overwritten in place by a retrain while the pipeline sits parked, and for a torchao
+    # int8/fp8/nvfp4/mxfp8 load specifically, LoRAs are BAKED into the transformer at load time --
+    # restoring would silently keep serving the OLD bake. The parked pipe's active adapters are
+    # set to the SAME local id + weight the new request asks for, so only the new unconditional
+    # guard (not the tail's active-vs-requested equality clause) can be what forces the refusal.
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+
+    backend = DiffusionBackend()
+    fake_pipe = _RecordingPipe()
+    fake_pipe._unsloth_loras = [("my-local-lora", 0.8)]
+    backend._state = _LoadState(
+        fake_pipe, None, "unsloth/same-repo", "base", "cuda", "float16", False,
+        offload_policy = OFFLOAD_NONE, parked = True, kind = "gguf",
+        gguf_filename = "model.gguf", transformer_quant = "fp8", text_encoder_quant = None,
+        memory_mode = "auto", gpu_ordinal = None,
+    )
+    monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
+    forgotten = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.forget_parked", lambda owner: forgotten.append(owner),
+    )
+    restore_called = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.restore_owner",
+        lambda owner, restore: restore_called.append(owner),
+    )
+    run_load_calls = []
+    monkeypatch.setattr(backend, "_run_load", lambda **kw: run_load_calls.append(kw))
+    monkeypatch.setattr(backend, "validate_load_request", lambda *a, **k: types.SimpleNamespace(base_repo = "base"))
+    monkeypatch.setattr(backend, "assert_precision_available", lambda *a, **k: None)
+
+    # The EXACT same local LoRA selection as what's parked -- an equality-only check would match.
+    backend.begin_load(
+        "unsloth/same-repo", gguf_filename = "model.gguf", model_kind = "gguf",
+        transformer_quant = "fp8", loras = [("my-local-lora", 0.8)],
+    )
+    assert restore_called == []  # never attempted -- the selected LoRA is local
+    assert forgotten == [arb.DIFFUSION]
+    assert len(run_load_calls) == 1  # cold load proceeded, re-reading the LoRA file from disk
+
+
 def test_begin_load_restores_a_pipeline_kind_load_whose_base_is_its_own_repo_id(monkeypatch):
     # A pipeline-kind load's base IS the repo itself (load_pipeline never runs resolve_base_repo's
     # family-default fallback for that kind) -- regression coverage for Minor 1: before that fix,
@@ -2797,6 +2840,11 @@ def test_matches_parked_identity_is_true_when_every_field_matches():
 # (the parked pipeline itself used a prequant path; the new request names none at all), which the
 # unconditional guard -- keyed only on the REQUEST's own fields -- does not touch, isolating the
 # state.transformer_prequant_path != transformer_prequant_path comparison specifically.
+# loras is a smaller version of the same trap: a BARE-STEM lora id (no "/") would also trip the
+# unconditional local-lora guard regardless of whether it matches the parked pipeline's own
+# adapters, masking a regression in the tail's `list(active_loras) == list(requested_loras)`
+# comparison. Using a HUB-shaped id ("owner/name") here keeps this entry isolated to that clause;
+# the local-lora guard itself gets its own dedicated tests below.
 _IDENTITY_FIELD_MISMATCHES = [
     ("repo_id", {"repo_id": "unsloth/a-different-repo"}, {}),
     ("gguf_filename", {"gguf_filename": "a-different.gguf"}, {}),
@@ -2807,7 +2855,7 @@ _IDENTITY_FIELD_MISMATCHES = [
     ("cpu_offload", {"cpu_offload": True}, {}),
     ("memory_mode", {"memory_mode": "low_vram"}, {}),
     ("gpu_ordinal", {"gpu_ordinal": 1}, {}),
-    ("loras", {"loras": [("adapter-x", 0.8)]}, {}),
+    ("loras", {"loras": [("unsloth/a-different-lora", 0.8)]}, {}),
     (
         "transformer_prequant_path",
         {},
@@ -2867,6 +2915,23 @@ def test_matches_parked_identity_refuses_even_a_byte_identical_prequant_path():
     backend._state = state
     kwargs = _canonical_identity_kwargs()
     kwargs.update(transformer_prequant_path = "/allowlisted/canon-transformer")
+    assert backend._matches_parked_identity(**kwargs) is False
+
+
+def test_matches_parked_identity_refuses_even_a_byte_identical_local_lora_selection():
+    # A bare-stem LoRA id (no "/") resolves to loras_dir()/<stem>.safetensors via the
+    # catalog/local-scan convention (diffusion_lora.resolve_one) -- the same file a retrain can
+    # overwrite in place while parked. The parked pipe's ACTIVE adapters are set to the exact same
+    # local id + weight the new request asks for, so the tail's active-vs-requested equality
+    # clause alone would call this a match (a torchao int8/fp8/nvfp4/mxfp8 load bakes LoRAs into
+    # the transformer at load time, so a changed local adapter with the SAME id would otherwise
+    # restore the OLD bake with no error) -- proving the new guard is what forces the refusal.
+    pipe = _RecordingPipe()
+    pipe._unsloth_loras = [("my-local-lora", 0.8)]
+    backend = DiffusionBackend()
+    backend._state = _canonical_parked_state(pipe)
+    kwargs = _canonical_identity_kwargs()
+    kwargs.update(loras = [("my-local-lora", 0.8)])
     assert backend._matches_parked_identity(**kwargs) is False
 
 

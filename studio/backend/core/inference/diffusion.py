@@ -279,15 +279,29 @@ def resolve_model_kind(gguf_filename: Optional[str], model_kind: Optional[str] =
 
 def _is_local_path_shaped(value: Optional[str]) -> bool:
     """True when ``value`` names a local filesystem path rather than a Hub repo id: a
-    ``"."``/``".."``/``"~"`` prefix, a backslash (never valid inside ``"org/name"``), or an
-    absolute path. Pure and filesystem-free (``Path.is_absolute()`` never touches disk) --
-    shared by ``validate_load_request``'s on-disk check and the parked-identity guard, which both
-    need to tell a local pick apart from a Hub one without stat'ing anything."""
+    ``"."``/``".."``/``"~"`` prefix, a backslash (never valid inside ``"org/name"``), an absolute
+    path, or a path that simply EXISTS on disk. The existence check matters because a relative
+    pick with no leading ``"."`` (e.g. ``"exports/my-merge"``) looks Hub-shaped by prefix alone
+    but still resolves to a real local file relative to the working directory, the same way
+    ``validate_load_request``'s own ``local_root.exists()`` check (and ``_is_trusted_diffusion_repo``)
+    already treat it -- this only widens what THIS helper alone can tell, it never changes
+    ``validate_load_request``'s own behavior, whose ``if local_root.exists(): ... elif
+    path_shaped: ...`` already checks existence first and with higher precedence. Fails CLOSED on
+    a filesystem error (permission denied, an unrepresentable path, ...): "can't be ruled out" is
+    treated the same as "is local" everywhere this feeds into. Shared by ``validate_load_request``
+    and the parked-identity guard, which both need to tell a local pick apart from a Hub one."""
     if not value:
         return False
-    return (
-        value.startswith(("/", "\\", "~", ".")) or "\\" in value or Path(value).expanduser().is_absolute()
-    )
+    try:
+        resolved = Path(value).expanduser()
+        return (
+            value.startswith(("/", "\\", "~", "."))
+            or "\\" in value
+            or resolved.is_absolute()
+            or resolved.exists()
+        )
+    except (OSError, ValueError):
+        return True
 
 
 def _active_lora_pairs(pipe: Any) -> list:
@@ -1875,10 +1889,19 @@ class DiffusionBackend:
         # name" surface, so this only narrows the fast path for picks that actually have one.
         # transformer_prequant_path is always local per its own field description ("a local path
         # installs arbitrary weights into the served model"), so its mere presence is enough.
+        # A requested LoRA can be local too -- a bare stem id (no "/") resolves to
+        # loras_dir()/<stem>.safetensors via the catalog/local-scan convention (see
+        # diffusion_lora.resolve_one), the same file a retrain can overwrite in place while
+        # parked. For a torchao int8/fp8/nvfp4/mxfp8 load specifically, LoRAs are BAKED into the
+        # transformer at load time, so restoring onto a changed local adapter would silently keep
+        # serving the OLD bake -- before this plan, clicking Load was the only way to pick up a
+        # retrained file, and it always re-read it.
+        requested_lora_ids = [lora_id for lora_id, _weight in (loras or [])]
         if (
             _is_local_path_shaped(repo_id)
             or _is_local_path_shaped(base_repo)
             or bool(transformer_prequant_path)
+            or any("/" not in lora_id for lora_id in requested_lora_ids)
         ):
             return False
         if (
