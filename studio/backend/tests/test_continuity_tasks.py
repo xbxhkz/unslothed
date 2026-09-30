@@ -67,6 +67,34 @@ def test_illegal_transition_raises(tmp_path):
         set_task_status(str(tmp_path), "t1", "complete")
 
 
+def test_every_spec_transition_is_legal_and_nothing_else_is(tmp_path):
+    """Table-driven against spec section 5's full edge list, including the
+    "any -> abandoned (explicit give-up)" edge that shipped unreachable from
+    pending/blocked (whole-branch review Important 4) -- this is the test
+    that would have caught that gap immediately, and its absence is exactly
+    why nothing did."""
+    legal = {
+        ("pending", "in_progress"), ("pending", "abandoned"),
+        ("in_progress", "complete"), ("in_progress", "failed"),
+        ("in_progress", "blocked"), ("in_progress", "abandoned"),
+        ("blocked", "pending"), ("blocked", "abandoned"),
+        ("failed", "abandoned"), ("failed", "pending"),
+    }
+    all_statuses = {"pending", "in_progress", "blocked", "failed", "abandoned", "complete"}
+    for src in all_statuses:
+        for dst in all_statuses:
+            if src == dst:
+                continue
+            task_id = f"t-{src}-{dst}"
+            add_task(str(tmp_path), _task(task_id, status = src))
+            should_succeed = (src, dst) in legal
+            if should_succeed:
+                set_task_status(str(tmp_path), task_id, dst)
+            else:
+                with pytest.raises(ContinuityError):
+                    set_task_status(str(tmp_path), task_id, dst)
+
+
 def test_complete_requires_non_empty_acceptance_criteria(tmp_path):
     add_task(str(tmp_path), _task("t1", status = "pending", acceptance_criteria = []))
     set_task_status(str(tmp_path), "t1", "in_progress")

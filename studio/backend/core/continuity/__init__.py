@@ -79,9 +79,9 @@ _TASKS_FILENAME = "task_queue.json"
 # there is no intermediate stored state to pass through. blocked returns to
 # pending, not to a "ready" it was never blocked away from reaching that way.
 _TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"in_progress"},
-    "in_progress": {"complete", "failed", "blocked"},
-    "blocked": {"pending"},
+    "pending": {"in_progress", "abandoned"},
+    "in_progress": {"complete", "failed", "blocked", "abandoned"},
+    "blocked": {"pending", "abandoned"},
     "failed": {"abandoned", "pending"},
     "abandoned": set(),
     "complete": set(),
