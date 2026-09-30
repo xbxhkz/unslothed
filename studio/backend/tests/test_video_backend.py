@@ -5003,6 +5003,88 @@ def test_restore_waits_for_an_inflight_generation_to_release_generate_lock(monke
     assert backend._state.parked is False
 
 
+def test_park_waits_for_an_inflight_generation_before_moving_anything(monkeypatch):
+    # Spec §9 (review I3.2), video twin: park() signals the running denoise, raises the teardown
+    # fence, and only moves tensors once the generation has released _generate_lock.
+    monkeypatch.setattr("core.inference.video.clear_gpu_cache", lambda: None)
+    backend = VideoBackend()
+    pipe = _RecordingPipe()
+    backend._state = _parked_video_state(pipe, parked = False)
+    generation_cancel = threading.Event()
+    backend._active_generate_cancel = generation_cancel
+
+    holding = threading.Event()
+    finish = threading.Event()
+
+    def _generation():
+        with backend._generate_lock:
+            holding.set()
+            finish.wait(5)
+
+    gen = threading.Thread(target = _generation)
+    gen.start()
+    assert holding.wait(5)
+
+    parked = threading.Event()
+    errors = []
+
+    def _park():
+        try:
+            backend.park()
+        except Exception as exc:  # noqa: BLE001 -- surfaced by the assert below
+            errors.append(exc)
+        parked.set()
+
+    pt = threading.Thread(target = _park)
+    pt.start()
+    assert generation_cancel.wait(5)
+    assert not parked.wait(0.5)
+    assert pipe.to_calls == []
+    assert backend._state.parked is False
+    assert backend._teardown_waiters == 1
+
+    finish.set()
+    gen.join(5)
+    pt.join(5)
+    assert errors == []
+    assert pipe.to_calls == ["cpu"]
+    assert backend._state.parked is True
+    assert backend._teardown_waiters == 0
+
+
+def test_begin_load_falls_back_to_cold_load_when_the_real_restore_move_fails(monkeypatch):
+    # Spec §9 (review I3.3), video twin: nothing on the restore path is mocked -- the real
+    # restore_owner calls the real restore(), whose real pipe.to(device) raises.
+    import core.inference.gpu_arbiter as arb
+    import core.inference.memory_residency as mr
+
+    monkeypatch.setattr("core.inference.video.clear_gpu_cache", lambda: None)
+    backend = VideoBackend()
+
+    class _FailingMovePipe(_RecordingPipe):
+        def __init__(self):
+            super().__init__(raise_on_to = True)
+            self.attempts = []
+
+        def to(self, device):
+            self.attempts.append(device)
+            return super().to(device)
+
+    pipe = _FailingMovePipe()
+    backend._state = _parked_video_state(
+        pipe, repo_id = "unsloth/same-repo", gguf_filename = "model.gguf", memory_mode = "auto",
+    )
+    monkeypatch.setattr(mr, "_parked", {arb.VIDEO: (1000, 0.0, backend.unload)})
+    run_load_calls = _mock_video_begin_load_collaborators(monkeypatch, backend)
+    monkeypatch.setattr(backend, "_state_device_target", lambda state: None)
+
+    backend.begin_load("unsloth/same-repo", gguf_filename = "model.gguf", model_kind = "gguf")
+    assert pipe.attempts == ["cuda"]  # the identity matched and the REAL move was really tried
+    assert not mr.is_parked(arb.VIDEO)
+    assert backend._state is None
+    assert len(run_load_calls) == 1
+
+
 def test_resident_footprint_mib_reads_the_recorded_value():
     from core.inference.video import _VideoLoadState
 

@@ -2596,6 +2596,187 @@ def test_restore_waits_for_an_inflight_generation_to_release_generate_lock(monke
     assert backend._state.parked is False
 
 
+class _GatedMovePipe:
+    """A pipe whose .to(<gate_device>) announces itself and then blocks until released, recording
+    ("enter", dev) / ("exit", dev) around every move, so a test can hold one move open while it
+    starts another operation, and afterwards prove no two moves ever overlapped."""
+
+    def __init__(self, gate_device):
+        self.gate_device = gate_device
+        self.events = []
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def to(self, device):
+        self.events.append(("enter", device))
+        if device == self.gate_device and not self.entered.is_set():
+            self.entered.set()
+            assert self.release.wait(5), "test never released the gated move"
+        self.events.append(("exit", device))
+        return self
+
+    def moves(self):
+        return [dev for kind, dev in self.events if kind == "exit"]
+
+    def never_overlapped(self):
+        # Every enter is immediately followed by its own exit: no second move started mid-move.
+        return all(
+            self.events[i][0] == "enter"
+            and self.events[i + 1] == ("exit", self.events[i][1])
+            for i in range(0, len(self.events), 2)
+        ) and len(self.events) % 2 == 0
+
+
+def _run_in_thread(fn):
+    errors = []
+    done = threading.Event()
+
+    def _body():
+        try:
+            fn()
+        except Exception as exc:  # noqa: BLE001 -- surfaced by the callers' asserts
+            errors.append(exc)
+        finally:
+            done.set()
+
+    thread = threading.Thread(target = _body)
+    thread.start()
+    return thread, done, errors
+
+
+def test_park_and_restore_racing_serialize_with_restore_first(monkeypatch):
+    # Spec §9 (review I3.1): park() arriving while restore()'s device move is IN FLIGHT must wait
+    # for it, never start its own move alongside it or commit over it. The gated pipe holds the
+    # restore's .to("cuda") open, park() is started against it, and only then is it released.
+    monkeypatch.setattr("core.inference.diffusion.clear_gpu_cache", lambda: None)
+    backend = DiffusionBackend()
+    pipe = _GatedMovePipe(gate_device = "cuda")
+    backend._state = _parked_state(pipe)
+    monkeypatch.setattr(backend, "_state_device_target", lambda state: None)
+
+    restore_thread, restore_done, restore_errors = _run_in_thread(backend.restore)
+    assert pipe.entered.wait(5)  # restore is mid-move
+    park_thread, park_done, park_errors = _run_in_thread(backend.park)
+    assert not park_done.wait(0.5)  # park waits for the in-flight move...
+    assert pipe.events == [("enter", "cuda")]  # ...and has not started one of its own
+
+    pipe.release.set()
+    restore_thread.join(5)
+    park_thread.join(5)
+    assert restore_errors == [] and park_errors == []
+    assert pipe.never_overlapped(), pipe.events
+    # One consistent end state: the LAST move landed on cpu and the state says parked.
+    assert pipe.moves() == ["cuda", "cpu"]
+    assert backend._state is not None and backend._state.parked is True
+    assert backend._teardown_waiters == 0
+
+
+def test_park_and_restore_racing_serialize_with_park_first(monkeypatch):
+    # The other interleaving: restore() arriving while park()'s move is in flight waits, then
+    # sees the committed parked state and moves it back -- never a torn "parked=True on the card".
+    monkeypatch.setattr("core.inference.diffusion.clear_gpu_cache", lambda: None)
+    backend = DiffusionBackend()
+    pipe = _GatedMovePipe(gate_device = "cpu")
+    backend._state = _parked_state(pipe, parked = False)
+    monkeypatch.setattr(backend, "_state_device_target", lambda state: None)
+
+    park_thread, park_done, park_errors = _run_in_thread(backend.park)
+    assert pipe.entered.wait(5)  # park is mid-move
+    restore_thread, restore_done, restore_errors = _run_in_thread(backend.restore)
+    assert not restore_done.wait(0.5)
+    assert pipe.events == [("enter", "cpu")]
+
+    pipe.release.set()
+    park_thread.join(5)
+    restore_thread.join(5)
+    assert park_errors == [] and restore_errors == []
+    assert pipe.never_overlapped(), pipe.events
+    assert pipe.moves() == ["cpu", "cuda"]
+    assert backend._state is not None and backend._state.parked is False
+    assert backend._teardown_waiters == 0
+
+
+def test_park_waits_for_an_inflight_generation_before_moving_anything(monkeypatch):
+    # Spec §9 (review I3.2): park() reuses unload()'s cancellation preamble -- signal the running
+    # denoise, raise the teardown fence, then take _generate_lock -- so it can never move tensors
+    # out from under a generation. The "generation" here holds _generate_lock exactly as a real
+    # denoise does for its whole body.
+    monkeypatch.setattr("core.inference.diffusion.clear_gpu_cache", lambda: None)
+    backend = DiffusionBackend()
+    pipe = _RecordingPipe()
+    backend._state = _parked_state(pipe, parked = False)
+    generation_cancel = threading.Event()
+    backend._active_generate_cancel = generation_cancel
+
+    holding = threading.Event()
+    finish = threading.Event()
+
+    def _generation():
+        with backend._generate_lock:
+            holding.set()
+            finish.wait(5)
+
+    gen = threading.Thread(target = _generation)
+    gen.start()
+    assert holding.wait(5)
+
+    park_thread, park_done, park_errors = _run_in_thread(backend.park)
+    assert generation_cancel.wait(5)  # the in-flight denoise was told to stop...
+    assert not park_done.wait(0.5)  # ...but park still waits for it to actually let go
+    assert pipe.to_calls == []
+    assert backend._state.parked is False
+    assert backend._teardown_waiters == 1  # fence up: a queued generation would refuse now
+
+    finish.set()
+    gen.join(5)
+    park_thread.join(5)
+    assert park_errors == []
+    assert pipe.to_calls == ["cpu"]
+    assert backend._state.parked is True
+    assert backend._teardown_waiters == 0
+
+
+def test_begin_load_falls_back_to_cold_load_when_the_real_restore_move_fails(monkeypatch):
+    # Spec §9 (review I3.3): the stronger twin of
+    # test_begin_load_falls_back_to_cold_load_when_restore_raises, which injects the failure by
+    # replacing memory_residency.restore_owner. Here NOTHING on the restore path is mocked: the
+    # real restore_owner (with real parked bookkeeping) calls the real restore(), whose real
+    # pipe.to(device) raises -- the CUDA-OOM-while-parked case.
+    import core.inference.memory_residency as mr
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+
+    monkeypatch.setattr("core.inference.diffusion.clear_gpu_cache", lambda: None)
+    backend = DiffusionBackend()
+
+    class _FailingMovePipe(_RecordingPipe):
+        def __init__(self):
+            super().__init__(raise_on_to = True)
+            self.attempts = []
+
+        def to(self, device):
+            self.attempts.append(device)
+            return super().to(device)
+
+    pipe = _FailingMovePipe()
+    backend._state = _LoadState(
+        pipe, None, "unsloth/same-repo", "base", "cuda", "float16", False,
+        offload_policy = OFFLOAD_NONE, parked = True, kind = "gguf",
+        gguf_filename = "model.gguf", memory_mode = "auto", gpu_ordinal = None,
+    )
+    monkeypatch.setattr(mr, "_parked", {arb.DIFFUSION: (1000, 0.0, backend.unload)})
+    run_load_calls = []
+    monkeypatch.setattr(backend, "_run_load", lambda **kw: run_load_calls.append(kw))
+    monkeypatch.setattr(backend, "validate_load_request", lambda *a, **k: types.SimpleNamespace(base_repo = "base"))
+    monkeypatch.setattr(backend, "assert_precision_available", lambda *a, **k: None)
+    monkeypatch.setattr(backend, "_state_device_target", lambda state: None)
+
+    backend.begin_load("unsloth/same-repo", gguf_filename = "model.gguf", model_kind = "gguf")
+    assert pipe.attempts == ["cuda"]  # the identity matched and the REAL move was really tried
+    assert not mr.is_parked(arb.DIFFUSION)  # bookkeeping dropped
+    assert backend._state is None  # the half-moved pipe was dropped, not left parked=True
+    assert len(run_load_calls) == 1  # fell through to a cold load instead of raising
+
+
 def test_resident_footprint_mib_reads_the_recorded_value():
     backend = DiffusionBackend()
     backend._state = _LoadState(
