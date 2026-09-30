@@ -4843,7 +4843,7 @@ def test_park_failure_falls_back_to_a_real_unload():
     assert backend._state is None  # real unload happened
 
 
-def test_restore_moves_a_parked_pipeline_back_to_its_device():
+def test_restore_moves_a_parked_pipeline_back_to_its_device(monkeypatch):
     from core.inference.diffusion_memory import OFFLOAD_NONE
     from core.inference.video import _VideoLoadState
 
@@ -4854,6 +4854,10 @@ def test_restore_moves_a_parked_pipeline_back_to_its_device():
         device = "cuda", dtype = "float16", kind = "safetensors",
         offload_policy = OFFLOAD_NONE, parked = True,
     )
+    # restore() calls _state_device_target, which (on the automatic, ordinal=None path) resolves
+    # through the REAL resolve_diffusion_device_target() -- an actual hardware probe (torch.cuda
+    # imports, torch.cuda.is_available(), etc.). No-op it so this stays a hardware-free unit test.
+    monkeypatch.setattr(backend, "_state_device_target", lambda state: None)
     backend.restore()
     assert fake_pipe.to_calls == ["cuda"]
     assert backend._state.parked is False
@@ -4931,6 +4935,10 @@ def test_begin_load_restores_instead_of_cold_loading_on_a_matching_identity(monk
     # test, and the fixture's family is None, so stub it out rather than build an unrelated
     # VideoFamily double.
     monkeypatch.setattr(backend, "status", lambda: {})
+    # restore_owner's lambda above actually CALLS restore(), which calls _state_device_target --
+    # a real hardware probe (resolve_diffusion_device_target() -> torch.cuda.is_available() etc.)
+    # on the automatic, ordinal=None path. No-op it so this stays a hardware-free unit test.
+    monkeypatch.setattr(backend, "_state_device_target", lambda state: None)
 
     backend.begin_load("unsloth/same-repo", gguf_filename = "model.gguf", model_kind = "gguf")
     assert restored == [arb.VIDEO]
@@ -4979,7 +4987,14 @@ def test_begin_load_falls_back_to_cold_load_when_restore_raises(monkeypatch):
     )
     monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
 
+    # Records that restore_owner's callback was actually INVOKED (not just wired up), so this
+    # test can't be satisfied merely by the identity-mismatch branch (video.py:1471-1473), which
+    # also calls forget_parked + cold-loads WITHOUT ever calling restore_owner at all -- the
+    # mismatch branch would otherwise make this test pass even if restore_owner were never called.
+    restore_invoked = []
+
     def raising_restore(owner, restore):
+        restore_invoked.append(owner)
         raise RuntimeError("CUDA OOM")
 
     monkeypatch.setattr("core.inference.memory_residency.restore_owner", raising_restore)
@@ -4990,8 +5005,10 @@ def test_begin_load_falls_back_to_cold_load_when_restore_raises(monkeypatch):
     run_load_calls = _mock_video_begin_load_collaborators(monkeypatch, backend)
 
     backend.begin_load("unsloth/same-repo", model_kind = "gguf")
+    assert restore_invoked == [arb.VIDEO]  # restore_owner's callback really ran and really raised
     assert forgotten == [arb.VIDEO]
     assert len(run_load_calls) == 1  # fell through to cold load, did not raise to the caller
+    assert backend._state is None  # unload() really ran on the except path, not just status() not crashing
 
 
 def test_begin_load_cold_loads_when_the_repo_is_a_local_path_even_if_unchanged(monkeypatch):
@@ -5054,19 +5071,85 @@ def test_begin_load_cold_loads_when_the_resolved_family_name_differs(monkeypatch
     assert len(run_load_calls) == 1
 
 
+def _h3_modular_family(*, modular_workflow):
+    """A family double shaped so is_h3_native(fam, kind) is False (kind == "pipeline", not
+    "gguf") and begin_load's modular-workflow branch (video.py:1447) actually resolves through
+    fam.modular_workflow, instead of falling through to the `else: None` branch that made the
+    original version of this test pass for the wrong reason (SimpleNamespace(base_repo="base")
+    has no `name`/`modular_workflow`, so both sides always resolved to None)."""
+    return types.SimpleNamespace(
+        name = "minimax-h3", base_repo = "unsloth/minimax-h3-repo",
+        modular_workflow = modular_workflow,
+    )
+
+
+def test_begin_load_restores_on_a_matching_h3_modular_partition(monkeypatch):
+    """Positive counterpart to the mismatch test below: the parked ref2va partition, requested
+    again as ref2va, must actually restore -- proving the modular resolver
+    (`resolved_h3_task = h3_task or fam.modular_workflow`, video.py:1447) reads the REQUEST's own
+    h3_task rather than only ever landing on the family default (the family below defaults to
+    fl2va, the OTHER partition, so a resolver that silently dropped the request's h3_task would
+    restore the wrong partition here, not just fail to restore)."""
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+    from core.inference.video import _VideoLoadState
+    import core.inference.gpu_arbiter as arb
+
+    backend = VideoBackend()
+    fake_pipe = _RecordingPipe()
+    backend._state = _VideoLoadState(
+        pipe = fake_pipe, family = types.SimpleNamespace(name = "minimax-h3"),
+        repo_id = "unsloth/minimax-h3-repo", base_repo = "unsloth/minimax-h3-repo",
+        device = "cuda", dtype = "float16", kind = "pipeline",
+        offload_policy = OFFLOAD_NONE, parked = True, gguf_filename = None,
+        memory_mode = "auto", gpu_ordinal = None, h3_task = "ref2va",
+    )
+    monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
+    restored = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.restore_owner",
+        lambda owner, restore: (restore(), restored.append(owner)),
+    )
+    monkeypatch.setattr(
+        backend, "validate_load_request",
+        lambda *a, **k: _h3_modular_family(modular_workflow = "fl2va"),
+    )
+    monkeypatch.setattr(
+        "core.inference.video.assert_video_precision_available", lambda *a, **k: None,
+    )
+    run_load_calls = []
+    monkeypatch.setattr(backend, "_run_load", lambda **kw: run_load_calls.append(kw))
+    monkeypatch.setattr(backend, "status", lambda: {})
+    # Real restore() now calls _state_device_target -- no-op it so this stays a hardware-free unit
+    # test rather than probing the real GPU (see the matching fix on the diffusion side).
+    monkeypatch.setattr(backend, "_state_device_target", lambda state: None)
+
+    backend.begin_load(
+        "unsloth/minimax-h3-repo", model_kind = "pipeline", h3_task = "ref2va",
+    )
+    assert restored == [arb.VIDEO]
+    assert run_load_calls == []
+
+
 def test_begin_load_cold_loads_when_the_h3_task_differs(monkeypatch):
     """MiniMax-H3 hosts two denoiser partitions (keyframe fl2va vs reference ref2va) in the SAME
     repo; picking the wrong one restores a pipeline that shares module shapes/config/base model
-    with the one requested, so nothing else in the identity check would catch it."""
+    with the one requested, so nothing else in the identity check would catch it.
+
+    Uses the same family double as the positive test above (modular_workflow = "fl2va") so this
+    is a genuine partition mismatch on the modular resolver, not a None-vs-non-None fluke: the
+    original version of this test used a bare `SimpleNamespace(base_repo="base")` family, under
+    which `resolved_h3_task` always took the `else: None` branch regardless of the request's own
+    h3_task, so it passed even though nothing about the resolver itself was exercised."""
     from core.inference.diffusion_memory import OFFLOAD_NONE
     from core.inference.video import _VideoLoadState
 
     backend = VideoBackend()
     fake_pipe = _RecordingPipe()
     backend._state = _VideoLoadState(
-        pipe = fake_pipe, family = None, repo_id = "unsloth/minimax-h3-repo",
-        base_repo = "base", device = "cuda", dtype = "float16", kind = "gguf",
-        offload_policy = OFFLOAD_NONE, parked = True, gguf_filename = "model.gguf",
+        pipe = fake_pipe, family = types.SimpleNamespace(name = "minimax-h3"),
+        repo_id = "unsloth/minimax-h3-repo", base_repo = "unsloth/minimax-h3-repo",
+        device = "cuda", dtype = "float16", kind = "pipeline",
+        offload_policy = OFFLOAD_NONE, parked = True, gguf_filename = None,
         memory_mode = "auto", gpu_ordinal = None, h3_task = "fl2va",
     )
     monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
@@ -5075,13 +5158,20 @@ def test_begin_load_cold_loads_when_the_h3_task_differs(monkeypatch):
         "core.inference.memory_residency.restore_owner",
         lambda owner, restore: restore_called.append(owner),
     )
-    run_load_calls = _mock_video_begin_load_collaborators(monkeypatch, backend)
+    monkeypatch.setattr(
+        backend, "validate_load_request",
+        lambda *a, **k: _h3_modular_family(modular_workflow = "fl2va"),
+    )
+    monkeypatch.setattr(
+        "core.inference.video.assert_video_precision_available", lambda *a, **k: None,
+    )
+    run_load_calls = []
+    monkeypatch.setattr(backend, "_run_load", lambda **kw: run_load_calls.append(kw))
 
     backend.begin_load(
-        "unsloth/minimax-h3-repo", gguf_filename = "model.gguf", model_kind = "gguf",
-        h3_task = "ref2va",
+        "unsloth/minimax-h3-repo", model_kind = "pipeline", h3_task = "ref2va",
     )
-    assert restore_called == []  # same repo, different H3 denoiser partition
+    assert restore_called == []  # same repo, different H3 denoiser partition -- REQUEST's h3_task
     assert len(run_load_calls) == 1
 
 
@@ -5157,6 +5247,26 @@ def test_matches_parked_identity_refuses_even_a_byte_identical_local_repo_id():
     backend._state = state
     kwargs = _canonical_video_identity_kwargs()
     kwargs.update(repo_id = local_repo, base_repo = local_repo)
+    assert backend._matches_parked_identity(**kwargs) is False
+
+
+def test_matches_parked_identity_refuses_when_only_base_repo_is_local():
+    # Isolates the base_repo half of the unconditional local-path guard (video.py:1310,
+    # `_is_local_path_shaped(repo_id) or _is_local_path_shaped(base_repo)`) from the repo_id half:
+    # the test above sets BOTH fields to the same local path, so deleting just the
+    # `_is_local_path_shaped(base_repo)` clause would not be caught by any test -- a Hub-shaped
+    # repo_id paired with a local base_repo (e.g. an explicit local base override on an otherwise
+    # Hub-hosted pick) is a real, reachable case. repo_id and base_repo both stay equal to their
+    # parked-state counterparts, so the equality clause alone would call this a match; only the
+    # local-path guard can be what forces the refusal.
+    backend = VideoBackend()
+    local_base = str(Path("C:/models/local-base") if sys.platform == "win32" else Path("/models/local-base"))
+    state = dataclasses.replace(
+        _canonical_parked_video_state(_RecordingPipe()), base_repo = local_base,
+    )
+    backend._state = state
+    kwargs = _canonical_video_identity_kwargs()
+    kwargs.update(base_repo = local_base)
     assert backend._matches_parked_identity(**kwargs) is False
 
 

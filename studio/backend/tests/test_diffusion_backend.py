@@ -2450,7 +2450,7 @@ def test_park_failure_falls_back_to_a_real_unload():
     assert backend._state is None  # real unload happened
 
 
-def test_restore_moves_a_parked_pipeline_back_to_its_device():
+def test_restore_moves_a_parked_pipeline_back_to_its_device(monkeypatch):
     from core.inference.diffusion_memory import OFFLOAD_NONE
 
     backend = DiffusionBackend()
@@ -2459,6 +2459,10 @@ def test_restore_moves_a_parked_pipeline_back_to_its_device():
         fake_pipe, None, "repo", "base", "cuda", "float16", False,
         offload_policy = OFFLOAD_NONE, parked = True,
     )
+    # restore() calls _state_device_target, which (on the automatic, ordinal=None path) resolves
+    # through the REAL resolve_diffusion_device_target() -- an actual hardware probe (torch.cuda
+    # imports, torch.cuda.is_available(), etc.). No-op it so this stays a hardware-free unit test.
+    monkeypatch.setattr(backend, "_state_device_target", lambda state: None)
     backend.restore()
     assert fake_pipe.to_calls == ["cuda"]
     assert backend._state.parked is False
@@ -2509,6 +2513,10 @@ def test_begin_load_restores_instead_of_cold_loading_on_a_matching_identity(monk
     # test, and the fixture's family is None (as every other park/restore fixture in this file
     # uses), so stub it out rather than build an unrelated DiffusionFamily double.
     monkeypatch.setattr(backend, "status", lambda: {})
+    # restore_owner's lambda above actually CALLS restore(), which calls _state_device_target --
+    # a real hardware probe (resolve_diffusion_device_target() -> torch.cuda.is_available() etc.)
+    # on the automatic, ordinal=None path. No-op it so this stays a hardware-free unit test.
+    monkeypatch.setattr(backend, "_state_device_target", lambda state: None)
 
     backend.begin_load(
         "unsloth/same-repo", gguf_filename = "model.gguf", model_kind = "gguf",
@@ -2557,7 +2565,14 @@ def test_begin_load_falls_back_to_cold_load_when_restore_raises(monkeypatch):
     )
     monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
 
+    # Records that restore_owner's callback was actually INVOKED (not just wired up), so this
+    # test can't be satisfied merely by the identity-mismatch branch, which also calls
+    # forget_parked + cold-loads WITHOUT ever calling restore_owner at all -- the mismatch branch
+    # would otherwise make this test pass even if restore_owner were never called.
+    restore_invoked = []
+
     def raising_restore(owner, restore):
+        restore_invoked.append(owner)
         raise RuntimeError("CUDA OOM")
 
     monkeypatch.setattr("core.inference.memory_residency.restore_owner", raising_restore)
@@ -2571,8 +2586,10 @@ def test_begin_load_falls_back_to_cold_load_when_restore_raises(monkeypatch):
     monkeypatch.setattr(backend, "assert_precision_available", lambda *a, **k: None)
 
     backend.begin_load("unsloth/same-repo", model_kind = "gguf")
+    assert restore_invoked == [arb.DIFFUSION]  # restore_owner's callback really ran and really raised
     assert forgotten == [arb.DIFFUSION]
     assert len(run_load_calls) == 1  # fell through to cold load, did not raise to the caller
+    assert backend._state is None  # unload() really ran on the except path, not just status() not crashing
 
 
 def test_begin_load_cold_loads_when_only_the_prequant_path_differs(monkeypatch):
@@ -2740,6 +2757,10 @@ def test_begin_load_restores_a_pipeline_kind_load_whose_base_is_its_own_repo_id(
     )
     monkeypatch.setattr(backend, "assert_precision_available", lambda *a, **k: None)
     monkeypatch.setattr(backend, "status", lambda: {})
+    # restore_owner's lambda above actually CALLS restore(), which calls _state_device_target --
+    # a real hardware probe (resolve_diffusion_device_target() -> torch.cuda.is_available() etc.)
+    # on the automatic, ordinal=None path. No-op it so this stays a hardware-free unit test.
+    monkeypatch.setattr(backend, "_state_device_target", lambda state: None)
 
     backend.begin_load("unsloth/full-pipeline-repo", model_kind = "pipeline")
     assert restored == [arb.DIFFUSION]
@@ -2901,6 +2922,27 @@ def test_matches_parked_identity_refuses_even_a_byte_identical_local_repo_id():
     backend._state = state
     kwargs = _canonical_identity_kwargs()
     kwargs.update(repo_id = local_repo, base_repo = local_repo)
+    assert backend._matches_parked_identity(**kwargs) is False
+
+
+def test_matches_parked_identity_refuses_when_only_base_repo_is_local():
+    # Isolates the base_repo half of the unconditional local-path guard
+    # (`_is_local_path_shaped(repo_id) or _is_local_path_shaped(base_repo)`) from the repo_id
+    # half: the test above sets BOTH fields to the same local path, so deleting just the
+    # `_is_local_path_shaped(base_repo)` clause would not be caught by any test -- a Hub-shaped
+    # repo_id paired with a local base_repo is a real, reachable case. repo_id and base_repo both
+    # stay equal to their parked-state counterparts, so the equality clause alone would call this
+    # a match; only the local-path guard can be what forces the refusal.
+    import dataclasses
+
+    backend = DiffusionBackend()
+    local_base = str(Path("C:/models/local-base") if sys.platform == "win32" else Path("/models/local-base"))
+    state = dataclasses.replace(
+        _canonical_parked_state(_RecordingPipe()), base_repo = local_base,
+    )
+    backend._state = state
+    kwargs = _canonical_identity_kwargs()
+    kwargs.update(base_repo = local_base)
     assert backend._matches_parked_identity(**kwargs) is False
 
 

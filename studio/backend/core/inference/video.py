@@ -4937,7 +4937,13 @@ class VideoBackend:
                 h3_task = workflow,
                 offload_policy = offload_policy,
                 vae_tiling = True,
-                memory_mode = normalize_memory_mode(memory_mode),
+                # `or MEMORY_MODE_AUTO`: every other _VideoLoadState construction site commits the
+                # resolved "auto" rather than a bare None for an unset request (see begin_load's
+                # own resolver comment above), so this site matches them -- an unset memory_mode
+                # here previously committed None, which begin_load's parked-identity resolver never
+                # produces (it always computes "auto"), silently forcing an extra cold reload on an
+                # otherwise-genuine repeat rather than a wrong restore, but worth being consistent.
+                memory_mode = normalize_memory_mode(memory_mode) or MEMORY_MODE_AUTO,
                 speed_mode = effective_speed,
                 # Already filtered to the engaged optimisations (True names only).
                 speed_optims = speed_optims,
