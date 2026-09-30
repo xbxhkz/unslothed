@@ -26,7 +26,8 @@ _lock = threading.Lock()
 _owner: Optional[str] = None
 
 
-def _evict_chat() -> None:
+def _evict_chat(new_owner: Optional[str] = None) -> None:
+    # new_owner is unused: chat never parks, so it has no forced-eviction victim to protect.
     import time
 
     from core.inference import get_inference_backend
@@ -52,7 +53,7 @@ def _evict_chat() -> None:
     llama._wait_for_vram_settle(since_kill = time.monotonic())
 
 
-def _evict_diffusion() -> None:
+def _evict_diffusion(new_owner: Optional[str] = None) -> None:
     # Unload whichever engine the router has active (diffusers or native sd.cpp). The native
     # sd.cpp engine is a separate subprocess; park/restore doesn't apply, so it keeps a direct
     # unload. The in-process diffusers engine routes through memory_residency instead, so a
@@ -67,12 +68,15 @@ def _evict_diffusion() -> None:
         engine.unload()  # unchanged: subprocess-based, park/restore not applicable
         return
     from core.inference import memory_residency
+    # protect: the owner taking the GPU may itself be parked, about to be restored by its own
+    # begin_load() -- it must never be the victim that makes RAM room for THIS park.
     memory_residency.park_owner(
         DIFFUSION, engine.park, engine.unload, engine.resident_footprint_mib(),
+        protect = new_owner,
     )
 
 
-def _evict_video() -> None:
+def _evict_video(new_owner: Optional[str] = None) -> None:
     from core.inference.sd_cpp_engine import ENGINE_SD_CPP
     from core.inference.video import get_video_backend
 
@@ -81,12 +85,16 @@ def _evict_video() -> None:
         backend.unload()  # unchanged: subprocess-based, park/restore not applicable
         return
     from core.inference import memory_residency
+    # protect: see _evict_diffusion.
     memory_residency.park_owner(
         VIDEO, backend.park, backend.unload, backend.resident_footprint_mib(),
+        protect = new_owner,
     )
 
 
 # Patchable in tests via monkeypatch.setitem. Ownership is exclusive, so acquire_for's evict-the-current-owner generalises to any number of owners.
+# Each evictor is called with the NEW owner (the one acquiring the GPU), so a parking evictor can
+# keep that owner out of memory_residency's forced-eviction victims.
 _EVICTORS = {CHAT: _evict_chat, DIFFUSION: _evict_diffusion, VIDEO: _evict_video}
 
 
@@ -105,7 +113,7 @@ def acquire_for(owner: str, register: Optional[Callable[[], Any]] = None) -> Any
     with _lock:
         if _owner is not None and _owner != owner:
             logger.info("gpu_arbiter: evicting %s for %s", _owner, owner)
-            _EVICTORS[_owner]()
+            _EVICTORS[_owner](owner)
         _owner = owner
         return register() if register is not None else None
 

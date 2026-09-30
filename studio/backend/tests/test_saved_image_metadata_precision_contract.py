@@ -435,8 +435,8 @@ def engaged_client(monkeypatch, tmp_path):
     monkeypatch.setattr(engine_router, "_active_engine_name", "diffusers")
     monkeypatch.setattr(engine_router, "_fallback_reason", None)
     monkeypatch.setattr(gpu_arbiter, "_owner", None)
-    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda: None)
-    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.DIFFUSION, lambda: None)
+    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda new_owner: None)
+    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.DIFFUSION, lambda new_owner: None)
 
     # Record exactly the metadata dict the route hands the gallery.
     saved: list[dict] = []

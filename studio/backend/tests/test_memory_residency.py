@@ -116,6 +116,36 @@ def test_new_owner_alone_exceeds_budget_falls_back_to_direct_unload(monkeypatch)
     assert not mr.is_parked("a")
 
 
+def test_protect_keeps_the_acquiring_owner_out_of_forced_eviction(monkeypatch):
+    # Review I2: "a" is parked and is the owner about to take the GPU back (and restore). Parking
+    # "b" over budget must NOT evict "a" -- even though it is the oldest (the ONLY) other parked
+    # owner -- so with nothing else to evict, "b" unloads directly instead.
+    monkeypatch.setattr("utils.memory_park_settings.get_ram_park_budget_mib", lambda: 1500)
+    calls = []
+    park_a, unload_a, _, _ = _fake_owner("a", calls)
+    mr.park_owner("a", park_a, unload_a, 1000)
+    park_b, unload_b, _, _ = _fake_owner("b", calls)
+    mr.park_owner("b", park_b, unload_b, 1000, protect = "a")
+    assert calls == ["park-a", "unload-b"]  # a untouched; b's own park() never attempted
+    assert mr.is_parked("a")
+    assert not mr.is_parked("b")
+
+
+def test_protect_still_evicts_an_unprotected_older_owner(monkeypatch):
+    # protect narrows the victim set, it does not switch eviction off: the oldest parked owner is
+    # the protected one, so the NEXT oldest goes instead and the new owner still parks.
+    monkeypatch.setattr("utils.memory_park_settings.get_ram_park_budget_mib", lambda: 2500)
+    calls = []
+    for name in ("a", "b"):
+        park, unload, _, _ = _fake_owner(name, calls)
+        mr.park_owner(name, park, unload, 1000)
+    park_c, unload_c, _, _ = _fake_owner("c", calls)
+    mr.park_owner("c", park_c, unload_c, 1000, protect = "a")  # 3000 > 2500
+    assert calls == ["park-a", "park-b", "unload-b", "park-c"]
+    assert mr.is_parked("a") and mr.is_parked("c")
+    assert not mr.is_parked("b")
+
+
 def test_parked_footprint_mib_sums_all_parked_owners():
     calls = []
     park_a, unload_a, _, _ = _fake_owner("a", calls, footprint = 1000)

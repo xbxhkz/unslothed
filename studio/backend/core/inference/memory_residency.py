@@ -53,9 +53,9 @@ def forget_parked(owner: str) -> None:
         _parked.pop(owner, None)
 
 
-def _oldest_parked_other_than(owner: str) -> Optional[str]:
+def _oldest_parked_excluding(exclude: set) -> Optional[str]:
     with _lock:
-        candidates = [(parked_at, o) for o, (_, parked_at, _) in _parked.items() if o != owner]
+        candidates = [(parked_at, o) for o, (_, parked_at, _) in _parked.items() if o not in exclude]
     if not candidates:
         return None
     candidates.sort(key = lambda pair: pair[0])
@@ -67,7 +67,16 @@ def park_owner(
     park: Callable[[], bool],
     unload: Callable[[], None],
     footprint_mib: Optional[int],
+    protect: Optional[str] = None,
 ) -> None:
+    """Park ``owner`` (or fully unload it), evicting older parked owners to fit the RAM budget.
+
+    ``protect`` names an owner that must never be chosen as a forced-eviction victim: the owner
+    whose acquire is causing this park (gpu_arbiter passes the NEW owner). If it is parked, its
+    begin_load() is about to restore it, so tearing it down to make room would throw away the very
+    pipeline the switch-back exists to reuse. With nothing else evictable, ``owner`` itself is
+    unloaded instead -- the same fallback as any other over-budget park. ``None`` keeps the
+    original behavior exactly."""
     if footprint_mib is None:
         logger.info("memory_residency: %s has no resident footprint estimate, unloading directly", owner)
         unload()
@@ -77,8 +86,9 @@ def park_owner(
     from utils.memory_park_settings import get_ram_park_budget_mib
 
     budget = get_ram_park_budget_mib()
+    exclude = {owner} if protect is None else {owner, protect}
     while parked_footprint_mib() + footprint_mib > budget:
-        victim = _oldest_parked_other_than(owner)
+        victim = _oldest_parked_excluding(exclude)
         if victim is None:
             logger.info(
                 "memory_residency: parking %s (%d MiB) would exceed the %d MiB budget with "

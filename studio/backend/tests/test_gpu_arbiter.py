@@ -20,8 +20,8 @@ import core.inference.gpu_arbiter as arb
 def calls(monkeypatch):
     recorded: list[str] = []
     monkeypatch.setattr(arb, "_owner", None)
-    monkeypatch.setitem(arb._EVICTORS, arb.CHAT, lambda: recorded.append("evict-chat"))
-    monkeypatch.setitem(arb._EVICTORS, arb.DIFFUSION, lambda: recorded.append("evict-diffusion"))
+    monkeypatch.setitem(arb._EVICTORS, arb.CHAT, lambda new_owner: recorded.append("evict-chat"))
+    monkeypatch.setitem(arb._EVICTORS, arb.DIFFUSION, lambda new_owner: recorded.append("evict-diffusion"))
     return recorded
 
 
@@ -167,8 +167,8 @@ def test_competing_acquire_blocks_until_register_completes(monkeypatch):
 
     monkeypatch.setattr(arb, "_owner", None)
     evicted: list = []
-    monkeypatch.setitem(arb._EVICTORS, arb.DIFFUSION, lambda: evicted.append("evict-diffusion"))
-    monkeypatch.setitem(arb._EVICTORS, arb.VIDEO, lambda: evicted.append("evict-video"))
+    monkeypatch.setitem(arb._EVICTORS, arb.DIFFUSION, lambda new_owner: evicted.append("evict-diffusion"))
+    monkeypatch.setitem(arb._EVICTORS, arb.VIDEO, lambda new_owner: evicted.append("evict-video"))
 
     in_register = threading.Event()
     release_register = threading.Event()
@@ -357,11 +357,14 @@ def test_diffusion_eviction_routes_through_memory_residency_when_diffusers(monke
     )
     monkeypatch.setattr(
         "core.inference.memory_residency.park_owner",
-        lambda owner, park, unload, footprint: recorded.append((owner, footprint)),
+        lambda owner, park, unload, footprint, protect = None: recorded.append(
+            (owner, footprint, protect)
+        ),
     )
     arb.acquire_for(arb.DIFFUSION)
     arb.acquire_for(arb.CHAT)  # evicts diffusion
-    assert recorded == [(arb.DIFFUSION, 4096)]
+    # protect is the ACQUIRING owner, threaded through so it can never be a forced-eviction victim.
+    assert recorded == [(arb.DIFFUSION, 4096, arb.CHAT)]
 
 
 def test_diffusion_eviction_stays_direct_unload_for_sd_cpp(monkeypatch):
@@ -389,11 +392,57 @@ def test_video_eviction_routes_through_memory_residency_when_diffusers(monkeypat
     monkeypatch.setattr("core.inference.video.get_video_backend", lambda: fake_backend)
     monkeypatch.setattr(
         "core.inference.memory_residency.park_owner",
-        lambda owner, park, unload, footprint: recorded.append((owner, footprint)),
+        lambda owner, park, unload, footprint, protect = None: recorded.append(
+            (owner, footprint, protect)
+        ),
     )
     arb.acquire_for(arb.VIDEO)
     arb.acquire_for(arb.CHAT)
-    assert recorded == [(arb.VIDEO, 8192)]
+    assert recorded == [(arb.VIDEO, 8192, arb.CHAT)]
+
+
+def test_switching_back_never_force_evicts_the_owner_being_restored(monkeypatch):
+    # Review I2, the ping-pong: DIFFUSION -> VIDEO parks diffusion; VIDEO -> DIFFUSION then parks
+    # video, and with both over the RAM budget the forced-eviction loop used to pick "the oldest
+    # OTHER parked owner" -- DIFFUSION itself, torn down right before its own begin_load() would
+    # have restored it. Driven through the REAL acquire_for, evictors and memory_residency; only
+    # the two backends are fakes.
+    import core.inference.memory_residency as mr
+
+    monkeypatch.setattr(arb, "_owner", None)
+    monkeypatch.setattr(mr, "_parked", {})
+    monkeypatch.setattr("utils.memory_park_settings.get_ram_park_budget_mib", lambda: 1500)
+    events = []
+
+    def _fake(name, **extra):
+        return types.SimpleNamespace(
+            park = lambda: (events.append(f"park-{name}"), True)[1],
+            unload = lambda: events.append(f"unload-{name}"),
+            resident_footprint_mib = lambda: 1000,
+            **extra,
+        )
+
+    diffusion = _fake("diffusion")
+    video = _fake("video", status = lambda: {"engine": "diffusers"})
+    monkeypatch.setattr(
+        "core.inference.diffusion_engine_router.active_engine_name", lambda: "diffusers",
+    )
+    monkeypatch.setattr(
+        "core.inference.diffusion_engine_router.get_active_diffusion_engine", lambda: diffusion,
+    )
+    monkeypatch.setattr("core.inference.video.get_video_backend", lambda: video)
+
+    arb.acquire_for(arb.DIFFUSION)
+    arb.acquire_for(arb.VIDEO)  # parks diffusion (1000 <= 1500)
+    assert events == ["park-diffusion"] and mr.is_parked(arb.DIFFUSION)
+
+    arb.acquire_for(arb.DIFFUSION)  # parking video too would need 2000 > 1500
+    assert "unload-diffusion" not in events  # the owner being restored was never the victim
+    assert mr.is_parked(arb.DIFFUSION)
+    # Nothing else was evictable, so video took the direct-unload fallback instead of parking.
+    assert events == ["park-diffusion", "unload-video"]
+    assert not mr.is_parked(arb.VIDEO)
+    assert arb.current_owner() == arb.DIFFUSION
 
 
 def test_video_eviction_stays_direct_unload_for_sd_cpp(monkeypatch):

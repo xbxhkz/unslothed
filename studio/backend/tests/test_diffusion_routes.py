@@ -203,8 +203,8 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setattr(engine_router, "_fallback_reason", None)
     # Isolate from the real GPU arbiter: reset ownership and stub the evictors so acquire_for() never touches live singletons.
     monkeypatch.setattr(gpu_arbiter, "_owner", None)
-    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda: None)
-    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.DIFFUSION, lambda: None)
+    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda new_owner: None)
+    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.DIFFUSION, lambda new_owner: None)
 
     # In-memory gallery backed by tmp files, so routes exercise persistence wiring without PIL/real disk under studio_root.
     store: dict[str, dict] = {}
@@ -677,7 +677,7 @@ def test_load_validation_failure_does_not_evict_chat(client, monkeypatch):
     # A rejected image-model pick must not tear down the loaded chat model: validation runs before acquire_for.
     monkeypatch.setattr(gpu_arbiter, "_owner", gpu_arbiter.CHAT)
     evicted = []
-    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda: evicted.append(True))
+    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda new_owner: evicted.append(True))
 
     backend = _FakeBackend()
 
@@ -704,7 +704,7 @@ def test_gated_base_load_returns_400_without_evicting_chat(client, monkeypatch):
 
     monkeypatch.setattr(gpu_arbiter, "_owner", gpu_arbiter.CHAT)
     evicted = []
-    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda: evicted.append(True))
+    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda new_owner: evicted.append(True))
     # The arbiter is only taken for a non-CPU load, which is exactly where an eviction is at stake.
     monkeypatch.setattr(
         devmod, "resolve_diffusion_device_target", lambda: _types.SimpleNamespace(device = "cuda")
@@ -872,8 +872,8 @@ def test_gated_pick_on_an_engine_switch_keeps_the_previous_model(monkeypatch, de
     )
     monkeypatch.setattr(gpu_arbiter, "_owner", gpu_arbiter.CHAT)
     evicted: list = []
-    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda: evicted.append(True))
-    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.DIFFUSION, lambda: None)
+    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda new_owner: evicted.append(True))
+    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.DIFFUSION, lambda new_owner: None)
 
     app = FastAPI()
     app.include_router(studio_router, prefix = "/api/inference")
@@ -901,7 +901,7 @@ def test_load_refused_during_training_does_not_evict_chat(client, monkeypatch):
 
     monkeypatch.setattr(gpu_arbiter, "_owner", gpu_arbiter.CHAT)
     evicted = []
-    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda: evicted.append(True))
+    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda new_owner: evicted.append(True))
 
     class _Training:
         def is_training_active(self):
@@ -1131,8 +1131,8 @@ def test_load_routes_to_sd_cpp_on_cpu(monkeypatch, tmp_path):
     monkeypatch.setattr(sd_backend, "get_sd_cpp_backend", lambda: sd_fake)
 
     monkeypatch.setattr(gpu_arbiter, "_owner", None)
-    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda: None)
-    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.DIFFUSION, lambda: None)
+    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda new_owner: None)
+    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.DIFFUSION, lambda new_owner: None)
 
     app = FastAPI()
     app.include_router(studio_router, prefix = "/api/inference")
@@ -1420,7 +1420,7 @@ def test_precision_refusal_precedes_eviction_and_engine_selection(client, monkey
     backend = diffusion_module.get_diffusion_backend()
     evicted = []
     selected = []
-    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda: evicted.append("chat"))
+    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda new_owner: evicted.append("chat"))
     monkeypatch.setattr(gpu_arbiter, "_owner", gpu_arbiter.CHAT)
     monkeypatch.setattr(
         engine_router,

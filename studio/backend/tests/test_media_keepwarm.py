@@ -71,7 +71,7 @@ def media(monkeypatch):
     for owner, engine in engines.items():
         monkeypatch.setitem(mk._ENGINES, owner, lambda e = engine: e)
         # The real evictors tear down live backends; ownership sequencing is all these need.
-        monkeypatch.setitem(arb._EVICTORS, owner, lambda: None)
+        monkeypatch.setitem(arb._EVICTORS, owner, lambda new_owner: None)
         tracker = mk._TRACKERS[owner]
         monkeypatch.setattr(tracker, "_inflight", 0)
         monkeypatch.setattr(tracker, "_pending", 0)

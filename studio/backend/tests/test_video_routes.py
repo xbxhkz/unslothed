@@ -230,9 +230,9 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setattr(video_module, "get_video_backend", lambda: backend)
     # Isolate from the real GPU arbiter: reset ownership and stub the evictors so acquire_for() never touches live singletons.
     monkeypatch.setattr(gpu_arbiter, "_owner", None)
-    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda: None)
-    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.DIFFUSION, lambda: None)
-    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.VIDEO, lambda: None)
+    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda new_owner: None)
+    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.DIFFUSION, lambda new_owner: None)
+    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.VIDEO, lambda new_owner: None)
 
     # Pin the device to cpu so the load route deterministically takes the non-GPU branch; the arbiter gating has its own tests.
     import types
@@ -905,7 +905,7 @@ def test_precision_refusal_precedes_eviction(client, monkeypatch):
 
     backend = video_module.get_video_backend()
     evicted = []
-    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda: evicted.append("chat"))
+    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda new_owner: evicted.append("chat"))
     monkeypatch.setattr(gpu_arbiter, "_owner", gpu_arbiter.CHAT)
     refusal = precision_refusal_message(
         "transformer_quant",
@@ -962,7 +962,7 @@ def test_load_refused_during_training(client, monkeypatch):
 
     monkeypatch.setattr(gpu_arbiter, "_owner", gpu_arbiter.CHAT)
     evicted: list = []
-    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda: evicted.append(True))
+    monkeypatch.setitem(gpu_arbiter._EVICTORS, gpu_arbiter.CHAT, lambda new_owner: evicted.append(True))
 
     class _Training:
         def is_training_active(self):
