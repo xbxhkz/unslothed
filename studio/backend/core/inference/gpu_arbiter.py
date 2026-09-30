@@ -53,14 +53,37 @@ def _evict_chat() -> None:
 
 
 def _evict_diffusion() -> None:
-    # Unload whichever engine the router has active (diffusers or native sd.cpp).
-    from core.inference.diffusion_engine_router import get_active_diffusion_engine
-    get_active_diffusion_engine().unload()
+    # Unload whichever engine the router has active (diffusers or native sd.cpp). The native
+    # sd.cpp engine is a separate subprocess; park/restore doesn't apply, so it keeps a direct
+    # unload. The in-process diffusers engine routes through memory_residency instead, so a
+    # future re-acquire can restore from RAM rather than reload from disk.
+    from core.inference.diffusion_engine_router import (
+        active_engine_name, get_active_diffusion_engine,
+    )
+    from core.inference.sd_cpp_engine import ENGINE_SD_CPP
+
+    engine = get_active_diffusion_engine()
+    if active_engine_name() == ENGINE_SD_CPP:
+        engine.unload()  # unchanged: subprocess-based, park/restore not applicable
+        return
+    from core.inference import memory_residency
+    memory_residency.park_owner(
+        DIFFUSION, engine.park, engine.unload, engine.resident_footprint_mib(),
+    )
 
 
 def _evict_video() -> None:
+    from core.inference.sd_cpp_engine import ENGINE_SD_CPP
     from core.inference.video import get_video_backend
-    get_video_backend().unload()
+
+    backend = get_video_backend()
+    if backend.status()["engine"] == ENGINE_SD_CPP:
+        backend.unload()  # unchanged: subprocess-based, park/restore not applicable
+        return
+    from core.inference import memory_residency
+    memory_residency.park_owner(
+        VIDEO, backend.park, backend.unload, backend.resident_footprint_mib(),
+    )
 
 
 # Patchable in tests via monkeypatch.setitem. Ownership is exclusive, so acquire_for's evict-the-current-owner generalises to any number of owners.

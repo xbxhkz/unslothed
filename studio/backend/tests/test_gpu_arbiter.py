@@ -9,6 +9,8 @@ these verify only the ownership/eviction sequencing — no torch, GPU, or subpro
 
 from __future__ import annotations
 
+import types
+
 import pytest
 
 import core.inference.gpu_arbiter as arb
@@ -339,3 +341,68 @@ def test_the_safetensors_load_yields_a_gpu_it_lost_while_loading():
     guard = tail.index("if current_owner() != CHAT:")
     assert "await asyncio.to_thread(backend.unload_model, config.identifier)" in tail[guard:]
     assert tail.index("status_code = 409", guard) > guard
+
+
+def test_diffusion_eviction_routes_through_memory_residency_when_diffusers(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(arb, "_owner", None)
+    monkeypatch.setattr(
+        "core.inference.diffusion_engine_router.active_engine_name", lambda: "diffusers",
+    )
+    fake_engine = types.SimpleNamespace(
+        park = lambda: True, unload = lambda: None, resident_footprint_mib = lambda: 4096,
+    )
+    monkeypatch.setattr(
+        "core.inference.diffusion_engine_router.get_active_diffusion_engine", lambda: fake_engine,
+    )
+    monkeypatch.setattr(
+        "core.inference.memory_residency.park_owner",
+        lambda owner, park, unload, footprint: recorded.append((owner, footprint)),
+    )
+    arb.acquire_for(arb.DIFFUSION)
+    arb.acquire_for(arb.CHAT)  # evicts diffusion
+    assert recorded == [(arb.DIFFUSION, 4096)]
+
+
+def test_diffusion_eviction_stays_direct_unload_for_sd_cpp(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(arb, "_owner", None)
+    monkeypatch.setattr(
+        "core.inference.diffusion_engine_router.active_engine_name", lambda: "sd_cpp",
+    )
+    fake_engine = types.SimpleNamespace(unload = lambda: recorded.append("unloaded"))
+    monkeypatch.setattr(
+        "core.inference.diffusion_engine_router.get_active_diffusion_engine", lambda: fake_engine,
+    )
+    arb.acquire_for(arb.DIFFUSION)
+    arb.acquire_for(arb.CHAT)
+    assert recorded == ["unloaded"]
+
+
+def test_video_eviction_routes_through_memory_residency_when_diffusers(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(arb, "_owner", None)
+    fake_backend = types.SimpleNamespace(
+        status = lambda: {"engine": "diffusers"},
+        park = lambda: True, unload = lambda: None, resident_footprint_mib = lambda: 8192,
+    )
+    monkeypatch.setattr("core.inference.video.get_video_backend", lambda: fake_backend)
+    monkeypatch.setattr(
+        "core.inference.memory_residency.park_owner",
+        lambda owner, park, unload, footprint: recorded.append((owner, footprint)),
+    )
+    arb.acquire_for(arb.VIDEO)
+    arb.acquire_for(arb.CHAT)
+    assert recorded == [(arb.VIDEO, 8192)]
+
+
+def test_video_eviction_stays_direct_unload_for_sd_cpp(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(arb, "_owner", None)
+    fake_backend = types.SimpleNamespace(
+        status = lambda: {"engine": "sd_cpp"}, unload = lambda: recorded.append("unloaded"),
+    )
+    monkeypatch.setattr("core.inference.video.get_video_backend", lambda: fake_backend)
+    arb.acquire_for(arb.VIDEO)
+    arb.acquire_for(arb.CHAT)
+    assert recorded == ["unloaded"]
