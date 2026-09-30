@@ -2575,6 +2575,117 @@ def test_begin_load_falls_back_to_cold_load_when_restore_raises(monkeypatch):
     assert len(run_load_calls) == 1  # fell through to cold load, did not raise to the caller
 
 
+def test_begin_load_cold_loads_when_only_the_prequant_path_differs(monkeypatch):
+    # transformer_prequant_path "installs arbitrary weights into the served model" (its own field
+    # description in models/inference.py): every OTHER identity field can match while this one
+    # alone names a different local checkpoint, and restoring anyway would silently serve the
+    # OLD transformer instead of the one this request actually asked for.
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+
+    backend = DiffusionBackend()
+    fake_pipe = _RecordingPipe()
+    backend._state = _LoadState(
+        fake_pipe, None, "unsloth/same-repo", "base", "cuda", "float16", False,
+        offload_policy = OFFLOAD_NONE, parked = True, kind = "gguf",
+        gguf_filename = "model.gguf", transformer_quant = "fp8", text_encoder_quant = None,
+        memory_mode = "auto", gpu_ordinal = None,
+        transformer_prequant_path = "/allowlisted/transformer-a",
+    )
+    monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
+    forgotten = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.forget_parked", lambda owner: forgotten.append(owner),
+    )
+    restore_called = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.restore_owner",
+        lambda owner, restore: restore_called.append(owner),
+    )
+    run_load_calls = []
+    monkeypatch.setattr(backend, "_run_load", lambda **kw: run_load_calls.append(kw))
+    monkeypatch.setattr(backend, "validate_load_request", lambda *a, **k: types.SimpleNamespace(base_repo = "base"))
+    monkeypatch.setattr(backend, "assert_precision_available", lambda *a, **k: None)
+
+    backend.begin_load(
+        "unsloth/same-repo", gguf_filename = "model.gguf", model_kind = "gguf",
+        transformer_quant = "fp8",
+        # Every other field matches the parked state exactly; only this path differs.
+        transformer_prequant_path = "/allowlisted/transformer-B-A-DIFFERENT-CHECKPOINT",
+    )
+    assert restore_called == []  # never attempted -- the prequant path alone is a mismatch
+    assert forgotten == [arb.DIFFUSION]
+    assert len(run_load_calls) == 1  # cold load proceeded, reading the NEWLY requested checkpoint
+
+
+# _matches_parked_identity field-by-field coverage: the 3 begin_load tests above only prove the
+# method is WIRED into begin_load (and the Step-7-style mutation control proves that too, for the
+# whole method at once) -- they don't prove each individual comparison clause actually matters.
+# Deleting any ONE clause from the method's `or` chain would still leave every test above passing,
+# since they only ever vary repo_id (or, for the prequant test, one other single field). This
+# canonical-baseline + single-field-mutation suite closes that gap: it proves each compared field,
+# on its own, is sufficient to force a mismatch.
+
+
+def _canonical_parked_state(pipe):
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+
+    family = types.SimpleNamespace(name = "flux")
+    return _LoadState(
+        pipe, family, "unsloth/canon-repo", "unsloth/canon-base", "cuda", "float16", False,
+        offload_policy = OFFLOAD_NONE, parked = True, kind = "gguf",
+        gguf_filename = "canon.gguf", transformer_quant = "fp8", text_encoder_quant = "fp8",
+        memory_mode = "auto", gpu_ordinal = 0,
+        transformer_prequant_path = "/allowlisted/canon-transformer",
+    )
+
+
+def _canonical_identity_kwargs():
+    return dict(
+        repo_id = "unsloth/canon-repo", gguf_filename = "canon.gguf",
+        base_repo = "unsloth/canon-base", model_kind = "gguf",
+        transformer_quant = "fp8", text_encoder_quant = "fp8", cpu_offload = False,
+        memory_mode = "auto", gpu_ordinal = 0, loras = None,
+        transformer_prequant_path = "/allowlisted/canon-transformer", family_name = "flux",
+    )
+
+
+def test_matches_parked_identity_is_true_when_every_field_matches():
+    backend = DiffusionBackend()
+    backend._state = _canonical_parked_state(_RecordingPipe())
+    assert backend._matches_parked_identity(**_canonical_identity_kwargs()) is True
+
+
+_IDENTITY_FIELD_MISMATCHES = [
+    ("repo_id", {"repo_id": "unsloth/a-different-repo"}),
+    ("gguf_filename", {"gguf_filename": "a-different.gguf"}),
+    ("base_repo", {"base_repo": "unsloth/a-different-base"}),
+    ("model_kind", {"model_kind": "single_file"}),
+    ("transformer_quant", {"transformer_quant": "int8"}),
+    ("text_encoder_quant", {"text_encoder_quant": "nvfp4"}),
+    ("cpu_offload", {"cpu_offload": True}),
+    ("memory_mode", {"memory_mode": "low_vram"}),
+    ("gpu_ordinal", {"gpu_ordinal": 1}),
+    ("loras", {"loras": [("adapter-x", 0.8)]}),
+    ("transformer_prequant_path", {"transformer_prequant_path": "/allowlisted/a-different-transformer"}),
+    ("family_name", {"family_name": "qwen-image"}),
+]
+
+
+@pytest.mark.parametrize(
+    "field, override",
+    _IDENTITY_FIELD_MISMATCHES,
+    ids = [field for field, _ in _IDENTITY_FIELD_MISMATCHES],
+)
+def test_matches_parked_identity_is_false_when_exactly_one_field_differs(field, override):
+    backend = DiffusionBackend()
+    backend._state = _canonical_parked_state(_RecordingPipe())
+    kwargs = _canonical_identity_kwargs()
+    kwargs.update(override)
+    assert backend._matches_parked_identity(**kwargs) is False, (
+        f"{field} alone differing from the parked state must be enough to force a mismatch"
+    )
+
+
 def test_prefetch_aborts_when_cancelled(tmp_path):
     # A prefetch interrupted by unload raises instead of pulling the whole base, so the load can be preempted.
     backend = DiffusionBackend()

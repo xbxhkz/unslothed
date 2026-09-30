@@ -824,6 +824,11 @@ class _LoadState:
     # construction (including every test fixture already in this file) keeps working unchanged.
     parked: bool = False
     resident_mib: Optional[int] = None
+    # The local prequant checkpoint path this load committed to, or None. "A local path installs
+    # arbitrary weights into the served model" (models/inference.py's own description of this
+    # field) -- part of the build identity for the SAME reason gguf_filename is: two loads that
+    # agree on every other field can still be running different weights if only this differs.
+    transformer_prequant_path: Optional[str] = None
 
 
 @dataclass
@@ -1842,6 +1847,7 @@ class DiffusionBackend:
     def _matches_parked_identity(
         self, *, repo_id, gguf_filename, base_repo, model_kind, transformer_quant,
         text_encoder_quant, cpu_offload, memory_mode, gpu_ordinal, loras,
+        transformer_prequant_path, family_name,
     ) -> bool:
         """Conservative by construction: any field that doesn't match, or can't be compared,
         means "not the same model" -- restore only happens on a confirmed exact match. Serving
@@ -1859,6 +1865,17 @@ class DiffusionBackend:
             or state.cpu_offload != cpu_offload
             or state.memory_mode != memory_mode
             or state.gpu_ordinal != gpu_ordinal
+            # A local path "installs arbitrary weights into the served model" (its own field
+            # description) -- two requests agreeing on every other field can still be asking for
+            # DIFFERENT weights if only this path differs (e.g. a different allowlisted
+            # fine-tuned transformer for the same repo+scheme).
+            or state.transformer_prequant_path != transformer_prequant_path
+            # repo_id/gguf_filename alone don't pin down the family: family_override can send
+            # the SAME pick through a different DiffusionFamily (e.g. an edit-family override vs.
+            # a text-to-image override on the same GGUF with the same explicit base_repo), which
+            # changes the pipeline class actually built. base_repo doesn't always catch this --
+            # only when the two families' default bases happen to differ too.
+            or getattr(state.family, "name", None) != family_name
         ):
             return False
         active_loras = _active_lora_pairs(state.pipe)
@@ -1936,14 +1953,22 @@ class DiffusionBackend:
             # on nearly every ordinary request, spuriously treating a genuine match as a mismatch --
             # always the safe direction (an unnecessary cold reload, never a wrong restore), but it
             # would defeat the whole point of parking. All three resolvers are pure and network-free.
-            resolved_base_repo = resolve_base_repo(fam, base_repo)
             resolved_kind = resolve_model_kind(gguf_filename, model_kind)
+            # A pipeline-kind load's "base" IS the repo itself (load_pipeline sets base = repo_id
+            # for kind == "pipeline", never resolve_base_repo's family-default fallback) -- using
+            # resolve_base_repo here for that case would compare the family default against
+            # state.base_repo == repo_id, which mismatches on every genuine pipeline-kind repeat.
+            resolved_base_repo = (
+                repo_id if resolved_kind == "pipeline" else resolve_base_repo(fam, base_repo)
+            )
             resolved_memory_mode = normalize_memory_mode(memory_mode) or MEMORY_MODE_AUTO
             if self._matches_parked_identity(
                 repo_id = repo_id, gguf_filename = gguf_filename, base_repo = resolved_base_repo,
                 model_kind = resolved_kind, transformer_quant = transformer_quant,
                 text_encoder_quant = text_encoder_quant, cpu_offload = cpu_offload,
                 memory_mode = resolved_memory_mode, gpu_ordinal = gpu_ordinal, loras = loras,
+                transformer_prequant_path = transformer_prequant_path,
+                family_name = getattr(fam, "name", None),
             ):
                 try:
                     memory_residency.restore_owner(gpu_arbiter.DIFFUSION, self.restore)
@@ -4471,6 +4496,7 @@ class DiffusionBackend:
                         hf_token = hf_token,
                         resolved = resolved,
                         gguf_filename = gguf_filename,
+                        transformer_prequant_path = transformer_prequant_path,
                         # Built from the artifact this load COMMITTED to, by the same helper
                         # _plan_memory used, so the generate-time re-check reuses it verbatim.
                         variant_hint = _image_variant_hint(
@@ -6106,6 +6132,13 @@ class DiffusionBackend:
             state = self._state
             if state is None or not state.parked:
                 raise RuntimeError("diffusion.restore: nothing is parked")
+            # Pin THIS thread to the card the weights actually live on before touching them:
+            # begin_load can run on a pooled asyncio.to_thread worker a PREVIOUS pinned load left
+            # pointing at a different card, and state.device is the bare, un-indexed "cuda"
+            # string -- .to(state.device) alone would land on whatever card the calling thread
+            # already defaults to, not necessarily this pipeline's card. Same hazard, same fix
+            # generate() already applies via _state_device_target before touching a resident pipe.
+            self._state_device_target(state)
             state.pipe.to(state.device)
             self._state = replace(state, parked = False)
 
