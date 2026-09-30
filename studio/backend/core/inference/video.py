@@ -70,6 +70,7 @@ from .diffusion_device import (
     resolve_selected_cuda_ordinal,
 )
 from .diffusion_memory import (
+    MEMORY_MODE_AUTO,
     OFFLOAD_NONE,
     apply_memory_plan,
     estimate_gguf_resident_mib,
@@ -108,7 +109,7 @@ from .diffusion_transformer_quant import (
     quantize_transformer,
     select_transformer_quant_scheme,
 )
-from .diffusion import _memory_request_forces_offload
+from .diffusion import _is_local_path_shaped, _memory_request_forces_offload
 from .diffusion_precision import (
     effective_te_quant,
     normalize_te_quant,
@@ -1274,6 +1275,64 @@ class VideoBackend:
 
     # ── background load + progress ───────────────────────────────────────────
 
+    def _matches_parked_identity(
+        self, *, repo_id, gguf_filename, base_repo, model_kind, transformer_quant,
+        text_encoder_quant, memory_mode, gpu_ordinal, h3_task, family_name,
+    ) -> bool:
+        """Conservative by construction: any field that doesn't match, or can't be compared,
+        means "not the same model" -- restore only happens on a confirmed exact match. Serving
+        the wrong model's weights is the worst failure mode this whole piece could introduce.
+
+        No LoRA or cpu_offload comparison here, unlike the image backend's twin: video has no
+        LoRA surface at all (none of the image module's img2img/inpaint/ControlNet/LoRA surface
+        applies), and no cpu_offload field on _VideoLoadState -- offload is already gated by
+        park() itself (OFFLOAD_NONE only), so a parked state can never have drifted there."""
+        state = self._state
+        if state is None or not state.parked:
+            return False
+        # A local path can be overwritten IN PLACE on disk (e.g. re-exporting a merged checkpoint
+        # to the same output path) while the old pipeline sits parked in RAM. Nothing here can
+        # tell that happened without reading the file, and restoring on a path string that merely
+        # LOOKS unchanged would silently serve the OLD weights with no error at all -- exactly the
+        # failure class this whole method exists to prevent. So any local-path involvement in THIS
+        # request refuses the restore outright and unconditionally, even when the path is
+        # byte-identical to what's parked: a Hub repo id has no "swap the bytes under the same
+        # name" surface, so this only narrows the fast path for picks that actually have one.
+        # Reused from the image backend rather than duplicated -- the same shape check plus
+        # filesystem existence probe, failing closed on an OSError/ValueError -- since video.py
+        # already imports private helpers from diffusion.py for logic the two backends share
+        # (_memory_request_forces_offload, _assert_local_base_is_pipeline).
+        # No transformer_prequant_path or LoRA surface to guard here too: every pre-quantized
+        # denoiser/text-encoder artifact video can load resolves through a fixed, hardcoded
+        # per-family table (video_family_prequant_repo, H3_TE_QUANT_REPO), never a caller-supplied
+        # path, so repo_id/base_repo are the only two fields that can smuggle a local,
+        # in-place-overwritable pick into this comparison.
+        if _is_local_path_shaped(repo_id) or _is_local_path_shaped(base_repo):
+            return False
+        if (
+            state.repo_id != repo_id
+            or state.gguf_filename != gguf_filename
+            or state.base_repo != base_repo
+            or state.kind != model_kind
+            or state.transformer_quant != transformer_quant
+            or state.text_encoder_quant != text_encoder_quant
+            or state.memory_mode != memory_mode
+            or state.gpu_ordinal != gpu_ordinal
+            # MiniMax-H3 hosts two denoiser partitions -- keyframe (fl2va) and reference (ref2va)
+            # -- in the SAME repo, picked by h3_task: they share module shapes, config and base
+            # model, so a mismatched partition would restore, pass every other check, and
+            # generate from the wrong one with no error at all. None for every other family,
+            # where h3_task has no effect on what loads and both sides always resolve to None.
+            or state.h3_task != h3_task
+            # repo_id/gguf_filename alone don't pin down the family: family_override can send
+            # the SAME pick through a different VideoFamily, which changes the pipeline class
+            # actually built. base_repo doesn't always catch this -- only when the two families'
+            # default bases happen to differ too.
+            or getattr(state.family, "name", None) != family_name
+        ):
+            return False
+        return True
+
     def begin_load(
         self,
         repo_id: str,
@@ -1337,10 +1396,81 @@ class VideoBackend:
         # _loading. begin_load returns as soon as the thread is scheduled, and a delete arriving in
         # that gap sees only repo_id and base_repo, passes the guard, and starts removing a
         # companion repo this load needs. A later claim does not revoke a delete already admitted.
-        from .video_minimax_h3 import H3_COMPONENT_REPO, H3_GGUF_REPO, is_h3_native
+        from .video_minimax_h3 import (
+            H3_COMPONENT_REPO,
+            H3_GGUF_REPO,
+            h3_transformer_task,
+            is_h3_native,
+        )
 
-        h3_native = is_h3_native(fam, resolve_video_model_kind(gguf_filename, model_kind))
+        resolved_kind = resolve_video_model_kind(gguf_filename, model_kind)
+        h3_native = is_h3_native(fam, resolved_kind)
         claimed_assets = (H3_GGUF_REPO, H3_COMPONENT_REPO) if h3_native else ()
+
+        from core.inference import gpu_arbiter, memory_residency
+
+        if memory_residency.is_parked(gpu_arbiter.VIDEO):
+            # Resolved/normalized the same way _run_load / load_pipeline resolve them before
+            # committing to _VideoLoadState, not the raw request args: state.base_repo,
+            # state.kind, and state.memory_mode all store the RESOLVED value (family default or
+            # repo_id itself depending on kind, "gguf"/"single_file"/"pipeline" inferred from the
+            # filename, "auto" when unset), never a bare None. Comparing raw args here would
+            # compare "None" against the resolved value on nearly every ordinary request,
+            # spuriously treating a genuine match as a mismatch -- always the safe direction (an
+            # unnecessary cold reload, never a wrong restore), but it would defeat the whole point
+            # of parking. Every resolver below is pure and network-free.
+            if h3_native:
+                # The h3-native (sd.cpp) engine commits base_repo = fam.base_repo
+                # unconditionally, ignoring any base_repo override (see _run_load_h3_native): the
+                # native runtime has no diffusers base pipeline to load one into.
+                resolved_base_repo = fam.base_repo
+            elif resolved_kind == "pipeline":
+                # A pipeline-kind load's base IS the repo itself (load_pipeline sets base =
+                # repo_id for kind == "pipeline", never resolve_video_base_repo's family-default
+                # fallback) -- using resolve_video_base_repo here for that case would compare the
+                # family default against state.base_repo == repo_id, which mismatches on every
+                # genuine pipeline-kind repeat.
+                resolved_base_repo = repo_id
+            else:
+                resolved_base_repo = resolve_video_base_repo(fam, base_repo)
+            resolved_memory_mode = normalize_memory_mode(memory_mode) or MEMORY_MODE_AUTO
+            # MiniMax-H3 hosts two denoiser partitions (keyframe vs reference) in the same repo;
+            # which one a load commits to is resolved differently per engine, exactly as each
+            # _VideoLoadState construction site commits it: the native (sd.cpp) engine derives it
+            # from the picked GGUF filename, the modular Diffusers workflow from the request's
+            # h3_task (or the family's default workflow, see _load_h3_modular_pipeline's
+            # `workflow = h3_task or fam.modular_workflow`), and every other family never sets it
+            # at all (state.h3_task stays its None default), so it resolves to None on both sides.
+            if h3_native:
+                resolved_h3_task = h3_transformer_task(gguf_filename or "")
+            elif getattr(fam, "modular_workflow", None):
+                resolved_h3_task = h3_task or fam.modular_workflow
+            else:
+                resolved_h3_task = None
+            if self._matches_parked_identity(
+                repo_id = repo_id, gguf_filename = gguf_filename, base_repo = resolved_base_repo,
+                model_kind = resolved_kind, transformer_quant = transformer_quant,
+                text_encoder_quant = text_encoder_quant, memory_mode = resolved_memory_mode,
+                gpu_ordinal = gpu_ordinal, h3_task = resolved_h3_task,
+                family_name = getattr(fam, "name", None),
+            ):
+                try:
+                    memory_residency.restore_owner(gpu_arbiter.VIDEO, self.restore)
+                    return self.status()
+                except Exception:
+                    logger.exception("video.begin_load: restore failed, falling back to a cold load")
+                    memory_residency.forget_parked(gpu_arbiter.VIDEO)
+                    # restore()'s pipe.to(device) can fail PARTWAY through (e.g. CUDA OOM),
+                    # leaving self._state stale: still parked=True, pointing at a pipe that may be
+                    # half moved between devices. Falling through without dropping it would let
+                    # the cold load's own status() report -- or the load itself briefly race
+                    # against -- that corrupted pipe. unload() only clears Python-side state and
+                    # the CUDA cache; it never touches the pipe's tensors, so it is safe to call
+                    # on a pipe in any state.
+                    self.unload()
+            else:
+                memory_residency.forget_parked(gpu_arbiter.VIDEO)
+                self.unload()
 
         with self._lock:
             if self._loading is not None and self._loading.error is None:
@@ -6040,6 +6170,13 @@ class VideoBackend:
             state = self._state
             if state is None or not state.parked:
                 raise RuntimeError("video.restore: nothing is parked")
+            # Pin THIS thread to the card the weights actually live on before touching them:
+            # begin_load can run on a pooled asyncio.to_thread worker a PREVIOUS pinned load left
+            # pointing at a different card, and state.device is the bare, un-indexed "cuda"
+            # string -- .to(state.device) alone would land on whatever card the calling thread
+            # already defaults to, not necessarily this pipeline's card. Same hazard, same fix
+            # generate() already applies via _state_device_target before touching a resident pipe.
+            self._state_device_target(state)
             state.pipe.to(state.device)
             self._state = replace(state, parked = False)
 

@@ -4888,6 +4888,278 @@ def test_resident_footprint_mib_is_none_when_unrecorded():
     assert backend.resident_footprint_mib() is None
 
 
+# ── begin_load's restore-or-cold-load decision (Task 6, mirrors Task 5) ──────
+
+
+def _mock_video_begin_load_collaborators(monkeypatch, backend, *, fam_base_repo = "base"):
+    """Shared mocking for begin_load-level tests: everything begin_load calls before/around
+    the new branch, none of which is what's under test."""
+    monkeypatch.setattr(
+        backend, "validate_load_request",
+        lambda *a, **k: types.SimpleNamespace(base_repo = fam_base_repo),
+    )
+    monkeypatch.setattr(
+        "core.inference.video.assert_video_precision_available", lambda *a, **k: None,
+    )
+    run_load_calls = []
+    monkeypatch.setattr(backend, "_run_load", lambda **kw: run_load_calls.append(kw))
+    return run_load_calls
+
+
+def test_begin_load_restores_instead_of_cold_loading_on_a_matching_identity(monkeypatch):
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+    from core.inference.video import _VideoLoadState
+    import core.inference.gpu_arbiter as arb
+
+    backend = VideoBackend()
+    fake_pipe = _RecordingPipe()
+    backend._state = _VideoLoadState(
+        pipe = fake_pipe, family = None, repo_id = "unsloth/same-repo", base_repo = "base",
+        device = "cuda", dtype = "float16", kind = "gguf",
+        offload_policy = OFFLOAD_NONE, parked = True, gguf_filename = "model.gguf",
+        transformer_quant = None, text_encoder_quant = None, memory_mode = "auto",
+        gpu_ordinal = None, h3_task = None,
+    )
+    monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
+    restored = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.restore_owner",
+        lambda owner, restore: (restore(), restored.append(owner)),
+    )
+    run_load_calls = _mock_video_begin_load_collaborators(monkeypatch, backend)
+    # status() walks state.family.name -- irrelevant to the restore-vs-cold-load decision under
+    # test, and the fixture's family is None, so stub it out rather than build an unrelated
+    # VideoFamily double.
+    monkeypatch.setattr(backend, "status", lambda: {})
+
+    backend.begin_load("unsloth/same-repo", gguf_filename = "model.gguf", model_kind = "gguf")
+    assert restored == [arb.VIDEO]
+    assert run_load_calls == []  # the cold-load thread must never spawn
+
+
+def test_begin_load_cold_loads_when_the_requested_model_differs_from_whats_parked(monkeypatch):
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+    from core.inference.video import _VideoLoadState
+
+    backend = VideoBackend()
+    fake_pipe = _RecordingPipe()
+    backend._state = _VideoLoadState(
+        pipe = fake_pipe, family = None, repo_id = "unsloth/parked-repo", base_repo = "base",
+        device = "cuda", dtype = "float16", kind = "gguf",
+        offload_policy = OFFLOAD_NONE, parked = True,
+    )
+    monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
+    forgotten = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.forget_parked", lambda owner: forgotten.append(owner),
+    )
+    restore_called = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.restore_owner",
+        lambda owner, restore: restore_called.append(owner),
+    )
+    run_load_calls = _mock_video_begin_load_collaborators(monkeypatch, backend)
+
+    backend.begin_load("unsloth/a-totally-different-repo", model_kind = "gguf")
+    assert restore_called == []  # never attempted -- identity mismatch
+    assert len(run_load_calls) == 1  # cold load proceeded
+
+
+def test_begin_load_falls_back_to_cold_load_when_restore_raises(monkeypatch):
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+    from core.inference.video import _VideoLoadState
+    import core.inference.gpu_arbiter as arb
+
+    backend = VideoBackend()
+    fake_pipe = _RecordingPipe()
+    backend._state = _VideoLoadState(
+        pipe = fake_pipe, family = None, repo_id = "unsloth/same-repo", base_repo = "base",
+        device = "cuda", dtype = "float16", kind = "gguf",
+        offload_policy = OFFLOAD_NONE, parked = True,
+    )
+    monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
+
+    def raising_restore(owner, restore):
+        raise RuntimeError("CUDA OOM")
+
+    monkeypatch.setattr("core.inference.memory_residency.restore_owner", raising_restore)
+    forgotten = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.forget_parked", lambda owner: forgotten.append(owner),
+    )
+    run_load_calls = _mock_video_begin_load_collaborators(monkeypatch, backend)
+
+    backend.begin_load("unsloth/same-repo", model_kind = "gguf")
+    assert forgotten == [arb.VIDEO]
+    assert len(run_load_calls) == 1  # fell through to cold load, did not raise to the caller
+
+
+def test_begin_load_cold_loads_when_the_repo_is_a_local_path_even_if_unchanged(monkeypatch):
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+    from core.inference.video import _VideoLoadState
+
+    backend = VideoBackend()
+    fake_pipe = _RecordingPipe()
+    local_repo = str(Path("C:/models/local-pick") if sys.platform == "win32" else Path("/models/local-pick"))
+    backend._state = _VideoLoadState(
+        pipe = fake_pipe, family = None, repo_id = local_repo, base_repo = local_repo,
+        device = "cuda", dtype = "float16", kind = "gguf",
+        offload_policy = OFFLOAD_NONE, parked = True,
+    )
+    monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
+    restore_called = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.restore_owner",
+        lambda owner, restore: restore_called.append(owner),
+    )
+    run_load_calls = _mock_video_begin_load_collaborators(monkeypatch, backend, fam_base_repo = local_repo)
+
+    backend.begin_load(local_repo, base_repo = local_repo, model_kind = "gguf")
+    assert restore_called == []  # local path -- refused even though byte-identical
+    assert len(run_load_calls) == 1
+
+
+def test_begin_load_cold_loads_when_the_resolved_family_name_differs(monkeypatch):
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+    from core.inference.video import _VideoLoadState
+
+    backend = VideoBackend()
+    fake_pipe = _RecordingPipe()
+    parked_family = types.SimpleNamespace(name = "wan")
+    backend._state = _VideoLoadState(
+        pipe = fake_pipe, family = parked_family, repo_id = "unsloth/same-repo",
+        base_repo = "unsloth/same-base", device = "cuda", dtype = "float16", kind = "gguf",
+        offload_policy = OFFLOAD_NONE, parked = True, gguf_filename = "model.gguf",
+        memory_mode = "auto", gpu_ordinal = None, h3_task = None,
+    )
+    monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
+    restore_called = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.restore_owner",
+        lambda owner, restore: restore_called.append(owner),
+    )
+    requested_family = types.SimpleNamespace(name = "ltx2", base_repo = "unsloth/same-base")
+    monkeypatch.setattr(backend, "validate_load_request", lambda *a, **k: requested_family)
+    monkeypatch.setattr(
+        "core.inference.video.assert_video_precision_available", lambda *a, **k: None,
+    )
+    run_load_calls = []
+    monkeypatch.setattr(backend, "_run_load", lambda **kw: run_load_calls.append(kw))
+
+    backend.begin_load(
+        "unsloth/same-repo", base_repo = "unsloth/same-base", gguf_filename = "model.gguf",
+        model_kind = "gguf",
+    )
+    assert restore_called == []  # same repo/base, but a different resolved family
+    assert len(run_load_calls) == 1
+
+
+def test_begin_load_cold_loads_when_the_h3_task_differs(monkeypatch):
+    """MiniMax-H3 hosts two denoiser partitions (keyframe fl2va vs reference ref2va) in the SAME
+    repo; picking the wrong one restores a pipeline that shares module shapes/config/base model
+    with the one requested, so nothing else in the identity check would catch it."""
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+    from core.inference.video import _VideoLoadState
+
+    backend = VideoBackend()
+    fake_pipe = _RecordingPipe()
+    backend._state = _VideoLoadState(
+        pipe = fake_pipe, family = None, repo_id = "unsloth/minimax-h3-repo",
+        base_repo = "base", device = "cuda", dtype = "float16", kind = "gguf",
+        offload_policy = OFFLOAD_NONE, parked = True, gguf_filename = "model.gguf",
+        memory_mode = "auto", gpu_ordinal = None, h3_task = "fl2va",
+    )
+    monkeypatch.setattr("core.inference.memory_residency.is_parked", lambda owner: True)
+    restore_called = []
+    monkeypatch.setattr(
+        "core.inference.memory_residency.restore_owner",
+        lambda owner, restore: restore_called.append(owner),
+    )
+    run_load_calls = _mock_video_begin_load_collaborators(monkeypatch, backend)
+
+    backend.begin_load(
+        "unsloth/minimax-h3-repo", gguf_filename = "model.gguf", model_kind = "gguf",
+        h3_task = "ref2va",
+    )
+    assert restore_called == []  # same repo, different H3 denoiser partition
+    assert len(run_load_calls) == 1
+
+
+def _canonical_parked_video_state(pipe):
+    from core.inference.diffusion_memory import OFFLOAD_NONE
+    from core.inference.video import _VideoLoadState
+
+    family = types.SimpleNamespace(name = "wan")
+    return _VideoLoadState(
+        pipe = pipe, family = family, repo_id = "unsloth/canon-repo",
+        base_repo = "unsloth/canon-base", device = "cuda", dtype = "float16", kind = "gguf",
+        offload_policy = OFFLOAD_NONE, parked = True, gguf_filename = "canon.gguf",
+        transformer_quant = "fp8", text_encoder_quant = "fp8", memory_mode = "auto",
+        gpu_ordinal = 0, h3_task = None,
+    )
+
+
+def _canonical_video_identity_kwargs():
+    return dict(
+        repo_id = "unsloth/canon-repo", gguf_filename = "canon.gguf",
+        base_repo = "unsloth/canon-base", model_kind = "gguf",
+        transformer_quant = "fp8", text_encoder_quant = "fp8",
+        memory_mode = "auto", gpu_ordinal = 0, h3_task = None, family_name = "wan",
+    )
+
+
+def test_matches_parked_identity_is_true_when_every_field_matches():
+    backend = VideoBackend()
+    backend._state = _canonical_parked_video_state(_RecordingPipe())
+    assert backend._matches_parked_identity(**_canonical_video_identity_kwargs()) is True
+
+
+_VIDEO_IDENTITY_FIELD_MISMATCHES = [
+    ("repo_id", {"repo_id": "unsloth/a-different-repo"}, {}),
+    ("gguf_filename", {"gguf_filename": "a-different.gguf"}, {}),
+    ("base_repo", {"base_repo": "unsloth/a-different-base"}, {}),
+    ("model_kind", {"model_kind": "single_file"}, {}),
+    ("transformer_quant", {"transformer_quant": "int8"}, {}),
+    ("text_encoder_quant", {"text_encoder_quant": "nvfp4"}, {}),
+    ("memory_mode", {"memory_mode": "low_vram"}, {}),
+    ("gpu_ordinal", {"gpu_ordinal": 1}, {}),
+    ("h3_task", {"h3_task": "ref2va"}, {}),
+    ("family_name", {"family_name": "ltx2"}, {}),
+]
+
+
+@pytest.mark.parametrize(
+    "field, request_override, state_override",
+    _VIDEO_IDENTITY_FIELD_MISMATCHES,
+    ids = [field for field, _, _ in _VIDEO_IDENTITY_FIELD_MISMATCHES],
+)
+def test_matches_parked_identity_is_false_when_exactly_one_field_differs(
+    field, request_override, state_override,
+):
+    backend = VideoBackend()
+    state = _canonical_parked_video_state(_RecordingPipe())
+    if state_override:
+        state = dataclasses.replace(state, **state_override)
+    backend._state = state
+    kwargs = _canonical_video_identity_kwargs()
+    kwargs.update(request_override)
+    assert backend._matches_parked_identity(**kwargs) is False, (
+        f"{field} alone differing from the parked state must be enough to force a mismatch"
+    )
+
+
+def test_matches_parked_identity_refuses_even_a_byte_identical_local_repo_id():
+    backend = VideoBackend()
+    local_repo = str(Path("C:/models/local-pick") if sys.platform == "win32" else Path("/models/local-pick"))
+    state = dataclasses.replace(
+        _canonical_parked_video_state(_RecordingPipe()), repo_id = local_repo, base_repo = local_repo,
+    )
+    backend._state = state
+    kwargs = _canonical_video_identity_kwargs()
+    kwargs.update(repo_id = local_repo, base_repo = local_repo)
+    assert backend._matches_parked_identity(**kwargs) is False
+
+
 # ── the H3 native path and the audio VAE ─────────────────────────────────────
 def test_the_h3_native_load_never_puts_the_vae_on_the_cpu():
     """`low_vram` maps to the `model` policy, which emits `--vae-on-cpu` for everyone else.
