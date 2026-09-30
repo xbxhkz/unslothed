@@ -397,22 +397,25 @@ def _write_text(path: str, text: str) -> None:
         raise
 
 
-def execute(name: str, arguments, *, session_id: str | None = None, **kwargs) -> str:
+def execute(
+    name: str, arguments, *, session_id: str | None = None, thread_id: str | None = None,
+    **kwargs,
+) -> str:
     """Handler for continuity_task. Never raises -- a continuity read/write
     failure must degrade the turn, not break it, the same never-raises
     boundary every other built-in tool in this fork keeps at its execute()."""
     try:
-        return _execute(arguments, session_id = session_id)
+        return _execute(arguments, session_id = session_id, thread_id = thread_id)
     except BaseException as exc:  # noqa: BLE001 - a continuity failure must not break the turn
         return f"Error: continuity_task failed: {exc}"
 
 
-def _execute(arguments, *, session_id: str | None) -> str:
+def _execute(arguments, *, session_id: str | None, thread_id: str | None = None) -> str:
     from core.continuity.sandbox import confine_project_dir
 
     args = arguments if isinstance(arguments, dict) else {}
     action = str(args.get("action") or "").strip()
-    project_dir = confine_project_dir(session_id)
+    project_dir = confine_project_dir(session_id, thread_id)
 
     if action == "status":
         from core.continuity.render import render_context_summary

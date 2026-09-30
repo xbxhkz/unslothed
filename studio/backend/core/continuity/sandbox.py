@@ -17,11 +17,30 @@ continuity_task), so a module-level import here would be circular.
 
 from __future__ import annotations
 
+import os
+import re
 
-def confine_project_dir(session_id: str | None) -> str:
-    """The sandbox workdir continuity_task operates on for this session.
-    _get_workdir is None-safe (session_id or an anonymous key), so there is no
-    session_id-omitted escape from confinement."""
+
+def confine_project_dir(session_id: str | None, thread_id: str | None = None) -> str:
+    """The sandbox workdir continuity_task operates on for this conversation.
+
+    Namespaced by thread_id when one is available: _get_workdir's root can be
+    a SHARED, project-wide directory (a project session, or the global-
+    workspace setting), not a per-chat one -- without this, two chats sharing
+    that root would collide on the same task ids and the same
+    project_state.json. Falls back to the bare session workdir when
+    thread_id is unavailable, which is still confined and safe, just not
+    further namespaced (this is the CLI's case -- it has no thread_id
+    concept and always names --project-dir explicitly instead).
+
+    thread_id is sanitized to a safe directory-component shape before use,
+    the same defensive posture the rest of this package takes with any
+    caller-influenced string that becomes a path segment.
+    """
     from core.inference import tools as _tools
 
-    return _tools._get_workdir(session_id)
+    workdir = _tools._get_workdir(session_id)
+    if not thread_id:
+        return workdir
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", str(thread_id))[:128]
+    return os.path.join(workdir, "continuity-threads", safe)

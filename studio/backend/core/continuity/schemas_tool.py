@@ -21,9 +21,11 @@ CONTINUITY_TASK_TOOL = {
         "description": (
             "Track your own progress on a multi-step task so it survives a context reset: "
             "record what you tried and whether it failed, add tasks with dependencies, mark "
-            "them in progress or done, and check what state you're in. Always scoped to this "
-            "conversation's own files -- there is no separate project to name. Prefer this over "
-            "re-deriving status by re-reading the conversation."
+            "them in progress or done, and check what state you're in. Scoped to this "
+            "conversation when possible; may be shared with other chats in the same project "
+            "or workspace if this server's settings put multiple chats in one folder. There is "
+            "no separate project to name. Prefer this over re-deriving status by re-reading "
+            "the conversation."
         ),
         "parameters": {
             "type": "object",

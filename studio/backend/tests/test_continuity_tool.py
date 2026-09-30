@@ -107,3 +107,19 @@ def test_two_sessions_do_not_see_each_others_tasks(tmp_path, monkeypatch):
                                  "acceptance_criteria": ["y"]}, session_id = "s1")
     out = execute("continuity_task", {"action": "status"}, session_id = "s2")
     assert "t1" not in out
+
+
+def test_two_threads_sharing_one_session_do_not_see_each_others_tasks(tmp_path, monkeypatch):
+    """The real shared-workspace case Important-3 was found from: _get_workdir
+    can return the SAME root for every session_id (a project session, or the
+    global-workspace setting), unlike the keyed-dict fixture above which
+    already differs per session_id. Without thread_id namespacing, two chats
+    sharing that one root would collide on the same project_state.json."""
+    import core.inference.tools as tools_module
+    monkeypatch.setattr(tools_module, "_get_workdir", lambda session_id: str(tmp_path))
+    execute("continuity_task", {"action": "add_task", "id": "t1", "title": "x",
+                                 "acceptance_criteria": ["y"]},
+            session_id = "shared", thread_id = "thread-a")
+    out = execute("continuity_task", {"action": "status"}, session_id = "shared",
+                  thread_id = "thread-b")
+    assert "t1" not in out

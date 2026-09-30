@@ -10121,7 +10121,7 @@ def execute_tool(
         )
     if name in CONTINUITY_TOOL_NAMES:
         from core.continuity import execute as _continuity_execute
-        return _continuity_execute(name, arguments, session_id = session_id)
+        return _continuity_execute(name, arguments, session_id = session_id, thread_id = thread_id)
     if name == "search_knowledge_base":
         return _search_knowledge_base_with_budget(
             arguments,
