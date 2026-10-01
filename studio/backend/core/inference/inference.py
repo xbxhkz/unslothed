@@ -26,7 +26,9 @@ from utils.hardware import (
     raise_if_offloaded,
     get_visible_gpu_count,
 )
+from core.inference.airllm_sizing import AirLLMSizingError, fit_airllm_context_length
 from core.inference.audio_codecs import AudioCodecManager
+from core.inference.diffusion_device import resolve_diffusion_device_target, resolve_selected_cuda_ordinal
 from core.inference.runtime_context import runtime_context_length
 from core.inference.message_content import content_to_text
 from core.inference.chat_eos import (
@@ -388,8 +390,51 @@ class InferenceBackend:
                 "active_adapter": None,
             }
 
+            if config.is_airllm:
+                import airllm
+
+                ordinal = resolve_selected_cuda_ordinal(gpu_ids)
+                target = resolve_diffusion_device_target(ordinal = ordinal)
+
+                try:
+                    resolved_max_seq_len = fit_airllm_context_length(
+                        config.path,
+                        hf_token = hf_token if hf_token and hf_token.strip() else None,
+                        trust_remote_code = trust_remote_code,
+                    )
+                except AirLLMSizingError as e:
+                    raise RuntimeError(f"AirLLM load refused: {e}") from e
+
+                try:
+                    model = airllm.AutoModel.from_pretrained(
+                        config.path,
+                        device = target.torch_device,
+                        max_seq_len = resolved_max_seq_len,
+                        compression = None,
+                        hf_token = hf_token if hf_token and hf_token.strip() else None,
+                    )
+                except (airllm.NotEnoughSpaceException, ImportError) as e:
+                    raise RuntimeError(f"AirLLM load refused: {e}") from e
+
+                tokenizer = model.tokenizer
+                self.models[model_name]["model"] = model
+                self.models[model_name]["tokenizer"] = tokenizer
+
+                self.models[model_name]["context_length"] = runtime_context_length(
+                    model, resolved_max_seq_len,
+                )
+                self._resolve_chat_eos(model_name)
+                self._load_chat_template_info(model_name)
+
+                self.active_model_name = model_name
+                self.loading_models.discard(model_name)
+
+                logger.info(f"Successfully loaded model via AirLLM: {model_name}")
+                log_gpu_memory(f"After loading {model_name}")
+                return True
+
             # ── Audio model loading path ──────────────────────────
-            if config.is_audio:
+            elif config.is_audio:
                 audio_type = config.audio_type
                 adapter_info = " (LoRA adapter)" if config.is_lora else ""
                 logger.info(f"Loading audio ({audio_type}) model{adapter_info}: {model_name}")

@@ -8145,6 +8145,17 @@ def _is_unsupported_nvfp4_inference_error(msg: str) -> bool:
     return "nvfp4" in lower_msg and "per-module mlx quantization metadata" in lower_msg
 
 
+def _is_airllm_load_refusal(msg: str) -> bool:
+    """Whether msg is this project's own AirLLM pre-flight refusal (insufficient VRAM for
+    even one streamed layer, insufficient disk space for the one-time layer split, or the
+    defensive bitsandbytes-missing case) -- see InferenceBackend.load_model()'s AirLLM
+    branch. These cross the inference subprocess boundary as a plain string (the exception
+    TYPE is always lost, see core/inference/orchestrator.py:592-594), so detection is by a
+    distinctive marker this project's own code writes, not by exception type -- same idiom
+    as _is_unsupported_nvfp4_inference_error above."""
+    return "AirLLM load refused:" in msg
+
+
 def _maybe_unsupported_message(msg: str) -> str:
     """Rewrite a load/validate error into the friendly "not supported yet"
     message when it matches a known unsupported-model signature; otherwise
@@ -9480,6 +9491,11 @@ async def _load_model_impl(
             raise HTTPException(status_code = 409, detail = str(e))
         # Friendlier message for models Unsloth cannot load.
         redacted_msg = redact_native_paths(str(e))
+        if _is_airllm_load_refusal(redacted_msg):
+            logger.warning(
+                "AirLLM refused to load '%s': %s", model_log_label, redacted_msg,
+            )
+            raise HTTPException(status_code = 400, detail = redacted_msg)
         if _is_unsupported_nvfp4_inference_error(redacted_msg):
             logger.warning(
                 "NVFP4 inference is not supported yet while loading '%s'",
@@ -9987,6 +10003,11 @@ async def validate_model(
                     "in Settings, and confirm access to this gated repository."
                 ),
             )
+        if _is_airllm_load_refusal(redacted_msg):
+            logger.warning(
+                "AirLLM refused to load '%s': %s", model_log_label, redacted_msg,
+            )
+            raise HTTPException(status_code = 400, detail = redacted_msg)
         if _is_unsupported_nvfp4_inference_error(redacted_msg):
             logger.warning(
                 "NVFP4 inference is not supported yet while validating '%s'",
