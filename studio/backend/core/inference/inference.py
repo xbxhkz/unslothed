@@ -744,7 +744,13 @@ class InferenceBackend:
 
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
-            error_msg = format_error_message(e, config.identifier)
+            # format_error_message() substring-matches status codes ("401", "404", ...) with
+            # no word boundaries, so a MiB figure like "4012 MiB" would rewrite an AirLLM
+            # refusal into a bogus auth error and drop the marker the route's 400 needs.
+            if str(e).startswith("AirLLM load refused:"):
+                error_msg = str(e)
+            else:
+                error_msg = format_error_message(e, config.identifier)
 
             # Cleanup on failure
             if model_name in self.models:

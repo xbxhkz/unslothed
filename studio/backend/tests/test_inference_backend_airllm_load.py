@@ -239,3 +239,47 @@ def test_route_classifies_airllm_refusal_as_400():
 
     assert _is_airllm_load_refusal("AirLLM load refused: Not enough space. Free space under X") is True
     assert _is_airllm_load_refusal("Some unrelated CUDA error") is False
+
+
+def test_airllm_refusal_marker_survives_format_error_message_collision(monkeypatch):
+    # format_error_message() substring-matches "401"/"404"/... with no word boundaries; a MiB
+    # figure like "4012 MiB" would otherwise turn this refusal into a bogus "Authentication
+    # failed" message, drop the marker, and make the route answer 500 instead of 400.
+    from core.inference.airllm_sizing import AirLLMSizingError
+    from utils.utils import format_error_message
+
+    sizing_msg = (
+        "AirLLM sizing: 'org/big-model' needs 4012 MiB for its largest streamed unit plus "
+        "2048 MiB fixed overhead, but only 3000 MiB VRAM is free."
+    )
+    # Precondition: this message really does collide with format_error_message's triggers.
+    assert "AirLLM load refused:" not in format_error_message(
+        Exception(f"AirLLM load refused: {sizing_msg}"), "org/big-model"
+    )
+
+    calls = []
+    _install_fake_airllm(monkeypatch, calls)
+    backend = _make_backend()
+    config = _airllm_config("org/big-model")
+
+    with patch(
+        "core.inference.inference.fit_airllm_context_length",
+        side_effect = AirLLMSizingError(sizing_msg),
+    ), patch("core.inference.inference.resolve_selected_cuda_ordinal", return_value = None), \
+       patch("core.inference.inference.resolve_diffusion_device_target") as mock_target, \
+       patch("core.inference.inference.apply_diffusion_device_ordinal"), \
+       patch("core.inference.inference.get_device_map", return_value = "sequential"), \
+       patch("core.inference.inference.get_visible_gpu_count", return_value = 1):
+        mock_target.return_value = SimpleNamespace(torch_device = "cuda")
+        with pytest.raises(Exception) as exc_info:
+            backend.load_model(config, max_seq_length = 2048)
+
+    message = str(exc_info.value)
+    assert message.startswith("AirLLM load refused:")
+    assert "4012 MiB" in message
+    assert "Authentication failed" not in message
+
+    from routes.inference import _is_airllm_load_refusal
+
+    assert _is_airllm_load_refusal(message) is True
+    assert config.identifier not in backend.models  # failure cleanup still ran
