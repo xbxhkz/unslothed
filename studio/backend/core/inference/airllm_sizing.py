@@ -9,6 +9,15 @@ normal resident loading but false here -- AirLLM keeps only its single largest s
 (a decoder layer, or embed_tokens/lm_head for a large-vocab model) resident at a time, so the
 budget is dominated by the KV cache accumulated across the WHOLE generation, not by total
 model size. See the design spec's section 4.3 for the derivation.
+
+Exception: with ``tie_word_embeddings`` set, AirLLM's ``_install_streaming_hooks`` loads the
+embedding onto the GPU ONCE and keeps it resident (lm_head is re-tied to it), streaming only
+the decoder layers and final norm -- so the embedding coexists with every streamed layer and
+the KV cache, and the resident floor is ``decoder_layer + embed``, not their max.
+
+The result is also clamped to the model's ``max_position_embeddings`` when the config declares
+one: AirLLM only stores ``max_seq_len`` and never enforces it during generation, so this
+function is the only thing keeping the served context inside the model's trained range.
 """
 
 from typing import Any, Optional
@@ -92,10 +101,16 @@ def fit_airllm_context_length(
     decoder_layer_mib = (attn_params + mlp_params) * dtype_bytes / (1024 * 1024)
     embed_mib = vocab_size * hidden_size * dtype_bytes / (1024 * 1024)
 
-    # embed_tokens and lm_head are part of AirLLM's own streamed embed->layers->norm->lm_head
-    # rotation (confirmed in airllm_base.py), not separately GPU-resident -- compare both and
-    # take the larger as the one unit that must coexist with the KV cache.
-    largest_streamed_unit_mib = max(decoder_layer_mib, embed_mib)
+    # Untied: embed_tokens and lm_head are part of AirLLM's own streamed
+    # embed->layers->norm->lm_head rotation (confirmed in airllm_base.py), not separately
+    # GPU-resident -- compare both and take the larger as the one unit that must coexist with
+    # the KV cache. Tied: AirLLM pins the embedding on the GPU for the whole run and streams
+    # only decoder layers + norm, so both are resident at once. Read from the OUTER config,
+    # exactly as AirLLMBaseModel._install_streaming_hooks does (self.config.tie_word_embeddings).
+    if bool(getattr(config, "tie_word_embeddings", False)):
+        largest_streamed_unit_mib = decoder_layer_mib + embed_mib
+    else:
+        largest_streamed_unit_mib = max(decoder_layer_mib, embed_mib)
 
     target = resolve_diffusion_device_target(ordinal = ordinal)
     memory = snapshot_device_memory(target)
@@ -123,4 +138,16 @@ def fit_airllm_context_length(
             f"the {budget_mib:.0f} MiB remaining after its largest streamed unit and fixed "
             f"overhead. This model cannot run via AirLLM on this host."
         )
+
+    # AirLLM never enforces max_seq_len itself, so cap at the trained position limit when the
+    # config declares one (no clamp, and no invented fallback, when it doesn't).
+    max_position_embeddings = getattr(text_config, "max_position_embeddings", None) or getattr(
+        config, "max_position_embeddings", None
+    )
+    try:
+        max_position_embeddings = int(max_position_embeddings or 0)
+    except (TypeError, ValueError):
+        max_position_embeddings = 0
+    if max_position_embeddings > 0:
+        max_seq_len = min(max_seq_len, max_position_embeddings)
     return max_seq_len
