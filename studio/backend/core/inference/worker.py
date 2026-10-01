@@ -147,6 +147,7 @@ def _build_model_config(config: dict):
         model_id = model_name,
         hf_token = _clean_token(config.get("hf_token")),
         gguf_variant = config.get("gguf_variant"),
+        is_airllm = bool(config.get("is_airllm", False)),
     )
     if not mc:
         raise ValueError(f"Invalid model identifier: {model_name}")
@@ -365,6 +366,16 @@ def _handle_load(backend, config: dict, resp_queue: Any) -> None:
             trust_remote_code = True
             logger.info(
                 "Auto-enabled trust_remote_code for Nemotron model: %s", config["model_name"]
+            )
+        # airllm itself hardcodes trust_remote_code=True (AutoModel.get_module_class's
+        # AutoConfig and AirLLMBaseModel.get_tokenizer), whatever the request said. Force the
+        # flag so the remote-code consent scan below always runs before that code can execute.
+        if not trust_remote_code and getattr(mc, "is_airllm", False):
+            trust_remote_code = True
+            logger.info(
+                "Forcing trust_remote_code (and the remote-code consent gate) for AirLLM "
+                "load: the airllm library always executes repo custom code: %s",
+                config["model_name"],
             )
 
         # Authoritative gates over the model + the LoRA base resolved via mc. Must run before
@@ -1205,8 +1216,11 @@ def run_inference_process(
     _gate_targets = [model_name]
     if _lora_base:
         _gate_targets.append(_lora_base)
-    _trust_remote_code = config.get("trust_remote_code", False) or _needs_nemotron_trust(
-        model_name, hf_token = _hf_token
+    # is_airllm: airllm always executes repo custom code (see _handle_load), so gate it.
+    _trust_remote_code = (
+        config.get("trust_remote_code", False)
+        or bool(config.get("is_airllm", False))
+        or _needs_nemotron_trust(model_name, hf_token = _hf_token)
     )
     if not _run_security_gates(
         _gate_targets,

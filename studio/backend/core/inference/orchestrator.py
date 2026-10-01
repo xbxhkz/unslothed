@@ -1310,6 +1310,9 @@ class InferenceOrchestrator:
                 else None,
                 "mlx_kv_bits": mlx_kv_bits,
                 "chat_template_override": chat_template_override,
+                # The worker rebuilds ModelConfig from this dict, so the explicit AirLLM opt-in
+                # must cross the process boundary or it silently reverts to a resident load.
+                "is_airllm": bool(getattr(config, "is_airllm", False)),
             }
             resolved_gpu_ids, gpu_selection = prepare_gpu_selection(
                 gpu_ids,
