@@ -1952,6 +1952,14 @@ class DiffusionBackend:
             or getattr(state.family, "name", None) != family_name
         ):
             return False
+        # A torchao-baked LoRA at zero runtime scale is invisible to _active_lora_pairs (which
+        # drops zero-weight entries), but _baked_lora_names' own docstring is explicit that a
+        # zeroed bake "is not the same pipeline as one built without them" -- the base layer was
+        # quantised alongside that adapter's high-precision side path, not without it. Comparing
+        # only the active pairs would let a request with no LoRAs at all restore a pipeline that
+        # still carries a baked (if silenced) adapter the request never asked for.
+        if any(name not in requested_lora_ids for name in _baked_lora_names(state.pipe)):
+            return False
         active_loras = _active_lora_pairs(state.pipe)
         requested_loras = loras or []
         return list(active_loras) == list(requested_loras)

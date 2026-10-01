@@ -3381,6 +3381,23 @@ def test_matches_parked_identity_refuses_even_a_byte_identical_local_lora_select
     assert backend._matches_parked_identity(**kwargs) is False
 
 
+def test_matches_parked_identity_refuses_a_baked_lora_at_zero_scale_against_no_loras_requested():
+    # _baked_lora_names' own docstring: a torchao bake disabled at generate time (scale -> 0) "is
+    # not the same pipeline as one built without them" -- the base layer was quantised alongside
+    # that adapter's high-precision side path. _active_lora_pairs drops the zero-weight entry, so
+    # the tail's active-vs-requested equality clause alone sees an empty active set that matches
+    # a request with no LoRAs at all -- proving the new baked-names guard is what forces the
+    # refusal (whole-branch review M2).
+    pipe = _RecordingPipe()
+    pipe._unsloth_loras_baked = True
+    pipe._unsloth_loras = [("my-baked-lora", "/some/path.safetensors", 0.0)]
+    backend = DiffusionBackend()
+    backend._state = _canonical_parked_state(pipe)
+    kwargs = _canonical_identity_kwargs()
+    kwargs.update(loras = None)
+    assert backend._matches_parked_identity(**kwargs) is False
+
+
 def test_prefetch_aborts_when_cancelled(tmp_path):
     # A prefetch interrupted by unload raises instead of pulling the whole base, so the load can be preempted.
     backend = DiffusionBackend()
