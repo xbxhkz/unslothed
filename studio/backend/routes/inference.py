@@ -8892,6 +8892,7 @@ async def _load_model_impl(
                     # pass that touches a drafter candidate, so the boundary has
                     # to travel with it rather than being applied afterwards.
                     drafter_accept = _native_drafter_accept if native_grant_backed else None,
+                    is_airllm = request.is_airllm,
                 )
 
         # Guard and call go to the worker together: from_identifier can import transformers
