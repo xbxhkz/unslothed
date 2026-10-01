@@ -2405,9 +2405,13 @@ class _RecordingPipe:
         return self
 
 
-def test_park_moves_a_fully_resident_pipeline_to_cpu_and_keeps_state():
+def test_park_moves_a_fully_resident_pipeline_to_cpu_and_keeps_state(monkeypatch):
     from core.inference.diffusion_memory import OFFLOAD_NONE
 
+    # park()'s success path calls the real clear_gpu_cache(), a hardware probe (torch.cuda
+    # imports etc.) -- no-op it so this stays a hardware-free unit test, matching every other
+    # park()/restore() test in this file (whole-branch review M1).
+    monkeypatch.setattr("core.inference.diffusion.clear_gpu_cache", lambda: None)
     backend = DiffusionBackend()
     fake_pipe = _RecordingPipe()
     backend._state = _LoadState(
@@ -2436,9 +2440,12 @@ def test_park_refuses_a_non_none_offload_policy():
     assert backend._state is not None  # unchanged, still resident
 
 
-def test_park_failure_falls_back_to_a_real_unload():
+def test_park_failure_falls_back_to_a_real_unload(monkeypatch):
     from core.inference.diffusion_memory import OFFLOAD_NONE
 
+    # The fallback real unload() ends in clear_gpu_cache() too -- same hermeticity note as
+    # test_park_moves_a_fully_resident_pipeline_to_cpu_and_keeps_state (whole-branch review M1).
+    monkeypatch.setattr("core.inference.diffusion.clear_gpu_cache", lambda: None)
     backend = DiffusionBackend()
     fake_pipe = _RecordingPipe(raise_on_to = True)
     backend._state = _LoadState(
