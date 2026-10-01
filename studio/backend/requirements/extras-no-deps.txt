@@ -34,3 +34,10 @@ kernels==0.12.1
 # kernels<3.11 imports tomli as its tomllib fallback; --no-deps skips its own
 # marker dep, so list it here (no-op on the 3.12/3.13 default installs).
 tomli==2.4.1; python_version < "3.11"
+
+# airllm streams one transformer layer at a time from disk to GPU for a chat model too
+# large to fit resident in VRAM. --no-deps because its declared torch dependency is
+# unpinned to CUDA and would silently clobber the pinned torch==2.10.0+cu130 build; every
+# other declared dependency (accelerate, huggingface-hub, safetensors, scipy,
+# sentencepiece, tqdm, transformers) is already present in the Studio venv.
+airllm==4.0.0

@@ -26,7 +26,13 @@ from utils.hardware import (
     raise_if_offloaded,
     get_visible_gpu_count,
 )
+from core.inference.airllm_sizing import AirLLMSizingError, fit_airllm_context_length
 from core.inference.audio_codecs import AudioCodecManager
+from core.inference.diffusion_device import (
+    apply_diffusion_device_ordinal,
+    resolve_diffusion_device_target,
+    resolve_selected_cuda_ordinal,
+)
 from core.inference.runtime_context import runtime_context_length
 from core.inference.message_content import content_to_text
 from core.inference.chat_eos import (
@@ -388,8 +394,58 @@ class InferenceBackend:
                 "active_adapter": None,
             }
 
+            if config.is_airllm:
+                import airllm
+
+                ordinal = resolve_selected_cuda_ordinal(gpu_ids)
+                target = resolve_diffusion_device_target(ordinal = ordinal)
+                # Pin so the free-VRAM probe inside fit_airllm_context_length() reads the same
+                # card the weights will be placed on, not whatever torch's current device
+                # happens to be -- mirrors diffusion.py/video.py's identical use of this call
+                # right after resolving a target (diffusion_device.py's own docstring: "the
+                # offload policy reads torch.cuda.mem_get_info() with no argument, i.e. the
+                # CURRENT device"). A no-op for an automatic pick (ordinal=None).
+                apply_diffusion_device_ordinal(target)
+
+                try:
+                    resolved_max_seq_len = fit_airllm_context_length(
+                        config.path,
+                        hf_token = hf_token if hf_token and hf_token.strip() else None,
+                        trust_remote_code = trust_remote_code,
+                    )
+                except AirLLMSizingError as e:
+                    raise RuntimeError(f"AirLLM load refused: {e}") from e
+
+                try:
+                    model = airllm.AutoModel.from_pretrained(
+                        config.path,
+                        device = target.torch_device,
+                        max_seq_len = resolved_max_seq_len,
+                        compression = None,
+                        hf_token = hf_token if hf_token and hf_token.strip() else None,
+                    )
+                except (airllm.NotEnoughSpaceException, ImportError) as e:
+                    raise RuntimeError(f"AirLLM load refused: {e}") from e
+
+                tokenizer = model.tokenizer
+                self.models[model_name]["model"] = model
+                self.models[model_name]["tokenizer"] = tokenizer
+
+                self.models[model_name]["context_length"] = runtime_context_length(
+                    model, resolved_max_seq_len,
+                )
+                self._resolve_chat_eos(model_name)
+                self._load_chat_template_info(model_name)
+
+                self.active_model_name = model_name
+                self.loading_models.discard(model_name)
+
+                logger.info(f"Successfully loaded model via AirLLM: {model_name}")
+                log_gpu_memory(f"After loading {model_name}")
+                return True
+
             # ── Audio model loading path ──────────────────────────
-            if config.is_audio:
+            elif config.is_audio:
                 audio_type = config.audio_type
                 adapter_info = " (LoRA adapter)" if config.is_lora else ""
                 logger.info(f"Loading audio ({audio_type}) model{adapter_info}: {model_name}")
@@ -688,7 +744,13 @@ class InferenceBackend:
 
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
-            error_msg = format_error_message(e, config.identifier)
+            # format_error_message() substring-matches status codes ("401", "404", ...) with
+            # no word boundaries, so a MiB figure like "4012 MiB" would rewrite an AirLLM
+            # refusal into a bogus auth error and drop the marker the route's 400 needs.
+            if str(e).startswith("AirLLM load refused:"):
+                error_msg = str(e)
+            else:
+                error_msg = format_error_message(e, config.identifier)
 
             # Cleanup on failure
             if model_name in self.models:

@@ -3624,6 +3624,7 @@ class ModelConfig:
     is_lora: bool  # LoRA adapter?
     is_gguf: bool = False  # GGUF model?
     is_audio: bool = False  # TTS audio model?
+    is_airllm: bool = False  # Load via AirLLM's per-layer streaming instead of resident loading?
     audio_type: Optional[str] = None  # Audio codec type: 'snac', 'csm', 'bicodec', 'dac'
     has_audio_input: bool = False  # Accepts audio input (ASR/speech understanding)
     gguf_file: Optional[str] = None  # Full path to the .gguf file (local mode)
@@ -3697,6 +3698,7 @@ class ModelConfig:
         is_lora: bool = False,
         gguf_variant: Optional[str] = None,
         drafter_accept: Optional[Callable[[str, str, str, str], bool]] = None,
+        is_airllm: bool = False,
     ) -> Optional["ModelConfig"]:
         """Create ModelConfig from a clean model identifier (HF repo or local
         path), for FastAPI routes that send sanitized paths.
@@ -4036,6 +4038,7 @@ class ModelConfig:
             audio_type = audio_type_val,
             has_audio_input = has_audio_in,
             base_model = base_model,
+            is_airllm = is_airllm,
         )
 
     @classmethod

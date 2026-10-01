@@ -52,6 +52,14 @@ class LoadRequest(BaseModel):
     )
     load_in_4bit: bool = Field(True, description = "Load model in 4-bit quantization")
     is_lora: bool = Field(False, description = "Whether this is a LoRA adapter")
+    is_airllm: bool = Field(
+        False,
+        description = (
+            "Load via AirLLM's per-layer disk-to-GPU streaming instead of normal resident "
+            "loading. Dramatically slower; only for a model too large to fit this host's "
+            "VRAM even quantized. Never auto-selected -- the caller must opt in explicitly."
+        ),
+    )
     gguf_variant: Optional[str] = Field(
         None, description = "GGUF quantization variant (e.g. 'Q4_K_M')"
     )
