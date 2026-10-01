@@ -28,7 +28,11 @@ from utils.hardware import (
 )
 from core.inference.airllm_sizing import AirLLMSizingError, fit_airllm_context_length
 from core.inference.audio_codecs import AudioCodecManager
-from core.inference.diffusion_device import resolve_diffusion_device_target, resolve_selected_cuda_ordinal
+from core.inference.diffusion_device import (
+    apply_diffusion_device_ordinal,
+    resolve_diffusion_device_target,
+    resolve_selected_cuda_ordinal,
+)
 from core.inference.runtime_context import runtime_context_length
 from core.inference.message_content import content_to_text
 from core.inference.chat_eos import (
@@ -395,6 +399,13 @@ class InferenceBackend:
 
                 ordinal = resolve_selected_cuda_ordinal(gpu_ids)
                 target = resolve_diffusion_device_target(ordinal = ordinal)
+                # Pin so the free-VRAM probe inside fit_airllm_context_length() reads the same
+                # card the weights will be placed on, not whatever torch's current device
+                # happens to be -- mirrors diffusion.py/video.py's identical use of this call
+                # right after resolving a target (diffusion_device.py's own docstring: "the
+                # offload policy reads torch.cuda.mem_get_info() with no argument, i.e. the
+                # CURRENT device"). A no-op for an automatic pick (ordinal=None).
+                apply_diffusion_device_ordinal(target)
 
                 try:
                     resolved_max_seq_len = fit_airllm_context_length(

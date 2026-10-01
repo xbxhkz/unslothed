@@ -132,6 +132,7 @@ def test_airllm_branch_computes_max_seq_len_never_library_default(monkeypatch):
     with patch("core.inference.inference.fit_airllm_context_length", return_value = 131072) as mock_fit, \
          patch("core.inference.inference.resolve_selected_cuda_ordinal", return_value = 0), \
          patch("core.inference.inference.resolve_diffusion_device_target") as mock_target, \
+         patch("core.inference.inference.apply_diffusion_device_ordinal"), \
          patch("core.inference.inference.get_device_map", return_value = "sequential"), \
          patch("core.inference.inference.get_visible_gpu_count", return_value = 1):
         mock_target.return_value = SimpleNamespace(torch_device = "cuda:0")
@@ -154,6 +155,7 @@ def test_airllm_branch_stores_model_and_tokenizer(monkeypatch):
     with patch("core.inference.inference.fit_airllm_context_length", return_value = 65536), \
          patch("core.inference.inference.resolve_selected_cuda_ordinal", return_value = None), \
          patch("core.inference.inference.resolve_diffusion_device_target") as mock_target, \
+         patch("core.inference.inference.apply_diffusion_device_ordinal"), \
          patch("core.inference.inference.get_device_map", return_value = "sequential"), \
          patch("core.inference.inference.get_visible_gpu_count", return_value = 1):
         mock_target.return_value = SimpleNamespace(torch_device = "cuda")
@@ -177,6 +179,7 @@ def test_airllm_sizing_refusal_raises_with_marker_text(monkeypatch):
         side_effect = AirLLMSizingError("AirLLM sizing: cannot fit even one layer"),
     ), patch("core.inference.inference.resolve_selected_cuda_ordinal", return_value = None), \
        patch("core.inference.inference.resolve_diffusion_device_target") as mock_target, \
+       patch("core.inference.inference.apply_diffusion_device_ordinal"), \
        patch("core.inference.inference.get_device_map", return_value = "sequential"), \
        patch("core.inference.inference.get_visible_gpu_count", return_value = 1):
         mock_target.return_value = SimpleNamespace(torch_device = "cuda")
@@ -202,6 +205,7 @@ def test_airllm_not_enough_space_exception_wrapped_with_marker(monkeypatch):
     with patch("core.inference.inference.fit_airllm_context_length", return_value = 65536), \
          patch("core.inference.inference.resolve_selected_cuda_ordinal", return_value = None), \
          patch("core.inference.inference.resolve_diffusion_device_target") as mock_target, \
+         patch("core.inference.inference.apply_diffusion_device_ordinal"), \
          patch("core.inference.inference.get_device_map", return_value = "sequential"), \
          patch("core.inference.inference.get_visible_gpu_count", return_value = 1):
         mock_target.return_value = SimpleNamespace(torch_device = "cuda")
@@ -220,6 +224,7 @@ def test_airllm_defensive_import_error_wrapped_with_marker(monkeypatch):
     with patch("core.inference.inference.fit_airllm_context_length", return_value = 65536), \
          patch("core.inference.inference.resolve_selected_cuda_ordinal", return_value = None), \
          patch("core.inference.inference.resolve_diffusion_device_target") as mock_target, \
+         patch("core.inference.inference.apply_diffusion_device_ordinal"), \
          patch("core.inference.inference.get_device_map", return_value = "sequential"), \
          patch("core.inference.inference.get_visible_gpu_count", return_value = 1):
         mock_target.return_value = SimpleNamespace(torch_device = "cuda")
